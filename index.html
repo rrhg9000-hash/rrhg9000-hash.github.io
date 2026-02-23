@@ -47,25 +47,17 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
         import { getFirestore, collection, doc, onSnapshot, addDoc, deleteDoc, query, orderBy } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-        const firebaseConfig = {
-            apiKey: "AIzaSyC08ZGzI_U2M7LHz-EG07PWXOx6YWedn7s",
-            authDomain: "iwtttlapr.firebaseapp.com",
-            projectId: "iwtttlapr",
-            storageBucket: "iwtttlapr.firebasestorage.app",
-            messagingSenderId: "913975474144",
-            appId: "1:913975474144:web:b140db25bca5e153ca9d85",
-            measurementId: "G-YFXH2W76KS"
-        };
-
-        const ADMIN_TELEGRAM_ID = "7744774197"; 
-        const APP_ID = "liquid-glass-shop";
-
+        // Firebase Config
+        const firebaseConfig = JSON.parse(__firebase_config);
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'liquid-glass-shop';
+
+        const ADMIN_TELEGRAM_ID = "7744774197"; 
 
         const { useState, useEffect, useMemo } = React;
         const e = React.createElement;
@@ -85,34 +77,52 @@
             const [isCartOpen, setIsCartOpen] = useState(false);
             const [currentCat, setCurrentCat] = useState('all');
             const [search, setSearch] = useState('');
-            const [errorType, setErrorType] = useState(null);
 
             const tg = window.Telegram?.WebApp;
 
+            // RULE 3: Auth Before Queries
             useEffect(() => {
-                const init = async () => {
+                const initAuth = async () => {
                     try {
-                        await signInAnonymously(auth);
-                        onAuthStateChanged(auth, (fUser) => {
-                            setUser(fUser);
-                            if (fUser) {
-                                const tgUser = tg?.initDataUnsafe?.user;
-                                if (tgUser && String(tgUser.id) === ADMIN_TELEGRAM_ID) setIsAdmin(true);
-                            }
-                            setLoading(false);
-                        });
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
                     } catch (err) {
-                        setErrorType('auth');
-                        setLoading(false);
+                        console.error("Auth error", err);
                     }
                 };
-                init();
+                initAuth();
+                const unsubscribe = onAuthStateChanged(auth, (u) => {
+                    setUser(u);
+                    if (u) {
+                        const tgUser = tg?.initDataUnsafe?.user;
+                        if (tgUser && String(tgUser.id) === ADMIN_TELEGRAM_ID) {
+                            setIsAdmin(true);
+                        }
+                    }
+                    setLoading(false);
+                });
+                return () => unsubscribe();
             }, []);
 
+            // RULE 1 & 2: Use Public Path and Simple Queries
             useEffect(() => {
                 if (!user) return;
-                const unsubP = onSnapshot(collection(db, 'artifacts', APP_ID, 'public', 'data', 'products'), (s) => setProducts(s.docs.map(d => ({ id: d.id, ...d.data() }))), (err) => err.code === 'permission-denied' && setErrorType('firestore'));
-                const unsubC = onSnapshot(collection(db, 'artifacts', APP_ID, 'public', 'data', 'categories'), (s) => setCategories(s.docs.map(d => ({ id: d.id, ...d.data() }))), (err) => err.code === 'permission-denied' && setErrorType('firestore'));
+
+                // Ссылка на публичные коллекции (видны всем)
+                const productsRef = collection(db, 'artifacts', appId, 'public', 'data', 'products');
+                const categoriesRef = collection(db, 'artifacts', appId, 'public', 'data', 'categories');
+
+                const unsubP = onSnapshot(productsRef, (s) => {
+                    setProducts(s.docs.map(d => ({ id: d.id, ...d.data() })));
+                }, (err) => console.error("Products fetch error", err));
+
+                const unsubC = onSnapshot(categoriesRef, (s) => {
+                    setCategories(s.docs.map(d => ({ id: d.id, ...d.data() })));
+                }, (err) => console.error("Categories fetch error", err));
+
                 return () => { unsubP(); unsubC(); };
             }, [user]);
 
@@ -129,17 +139,13 @@
             const filtered = products.filter(p => (currentCat === 'all' || p.category === currentCat) && (p.name || "").toLowerCase().includes(search.toLowerCase()));
 
             const deleteItem = async (col, id) => {
-                if (confirm('Удалить этот элемент?')) {
-                    await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', col, id));
-                }
+                if (!user) return;
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', col, id));
             };
-
-            if (errorType === 'firestore') return e('div', { className: "p-10 text-center" }, "Пожалуйста, активируйте Firestore в консоли Firebase.");
 
             if (loading) return e('div', { className: "h-screen flex items-center justify-center" }, e('div', { className: "w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" }));
 
             return e('div', { className: "pb-24" },
-                // Header
                 e('header', { className: "sticky top-2 z-40 mx-2 mt-2" },
                     e('div', { className: "liquid-glass rounded-[24px] px-4 py-3 flex justify-between items-center shadow-lg" },
                         e('div', { className: "flex items-center gap-2 cursor-pointer", onClick: () => setView('catalog') },
@@ -160,7 +166,7 @@
 
                 e('main', { className: "p-4 max-w-2xl mx-auto" },
                     view === 'catalog' ? e('div', { className: "space-y-6" },
-                        e('input', { className: "w-full p-4 bg-white/50 backdrop-blur-md border border-white/60 rounded-2xl outline-none focus:ring-4 ring-blue-500/10 transition-all", placeholder: "Поиск деталей...", onChange: (e) => setSearch(e.target.value) }),
+                        e('input', { className: "w-full p-4 bg-white/50 backdrop-blur-md border border-white/60 rounded-2xl outline-none focus:ring-4 ring-blue-500/10 transition-all", placeholder: "Поиск...", onChange: (e) => setSearch(e.target.value) }),
                         e('div', { className: "flex gap-2 overflow-x-auto no-scrollbar" },
                             e('button', { onClick: () => setCurrentCat('all'), className: `px-5 py-2 rounded-xl font-bold text-sm whitespace-nowrap transition-all ${currentCat === 'all' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500'}` }, "Все"),
                             categories.map(c => e('button', { key: c.id, onClick: () => setCurrentCat(c.name), className: `px-5 py-2 rounded-xl font-bold text-sm whitespace-nowrap transition-all ${currentCat === c.name ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500'}` }, c.name))
@@ -181,9 +187,8 @@
                             ))
                         )
                     ) : e('div', { className: "space-y-6 animate-slide-up" },
-                        e('h2', { className: "text-2xl font-black" }, "Панель управления"),
+                        e('h2', { className: "text-2xl font-black" }, "Админ-панель"),
                         
-                        // Categories Admin
                         e('div', { className: "glass-card p-6 space-y-4" },
                             e('h3', { className: "font-bold" }, "Категории"),
                             e('div', { className: "flex flex-wrap gap-2" },
@@ -195,7 +200,7 @@
                             e('form', { 
                                 onSubmit: async (evt) => {
                                     evt.preventDefault();
-                                    await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'categories'), { name: evt.target.catname.value });
+                                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'categories'), { name: evt.target.catname.value });
                                     evt.target.reset();
                                 },
                                 className: "flex gap-2" 
@@ -205,14 +210,13 @@
                             )
                         ),
 
-                        // Products Admin
                         e('div', { className: "glass-card p-6 space-y-4" },
-                            e('h3', { className: "font-bold" }, "Добавить товар"),
+                            e('h3', { className: "font-bold" }, "Новый товар"),
                             e('form', {
                                 onSubmit: async (evt) => {
                                     evt.preventDefault();
                                     const f = evt.target;
-                                    await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'products'), {
+                                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), {
                                         name: f.pname.value,
                                         price: Number(f.pprice.value),
                                         img: f.pimg.value,
@@ -235,7 +239,6 @@
                             )
                         ),
 
-                        // Product List Admin
                         e('div', { className: "space-y-3" },
                             products.map(p => e('div', { key: p.id, className: "glass-card p-3 flex items-center justify-between" },
                                 e('div', { className: "flex items-center gap-3" },
@@ -251,7 +254,6 @@
                     )
                 ),
 
-                // Cart Drawer
                 isCartOpen && e('div', { className: "fixed inset-0 z-50 flex items-end justify-center" },
                     e('div', { className: "absolute inset-0 bg-slate-900/20 backdrop-blur-md", onClick: () => setIsCartOpen(false) }),
                     e('div', { className: "relative bg-white/80 backdrop-blur-2xl w-full max-w-2xl rounded-t-[40px] p-6 max-h-[90vh] flex flex-col shadow-2xl animate-slide-up" },
@@ -270,8 +272,7 @@
                                     e('span', { className: "font-black text-xs" }, item.qty),
                                     e('button', { onClick: () => setCart(cart.map(i => i.id === item.id ? {...i, qty: i.qty + 1} : i)), className: "text-blue-600 font-bold" }, "+")
                                 )
-                            )),
-                            cart.length === 0 && e('div', { className: "text-center py-10 text-slate-400 italic" }, "Пусто")
+                            ))
                         ),
 
                         cart.length > 0 && e('form', { 
@@ -289,20 +290,16 @@
                                 e('input', { name: "fn", placeholder: "Имя", required: true, className: "p-3 bg-white/40 border border-white/60 rounded-xl outline-none text-sm" }),
                                 e('input', { name: "ln", placeholder: "Фамилия", required: true, className: "p-3 bg-white/40 border border-white/60 rounded-xl outline-none text-sm" })
                             ),
-                            e('input', { name: "tel", type: "tel", placeholder: "Номер телефона", required: true, className: "w-full p-3 bg-white/40 border border-white/60 rounded-xl outline-none text-sm" }),
+                            e('input', { name: "tel", type: "tel", placeholder: "Телефон", required: true, className: "w-full p-3 bg-white/40 border border-white/60 rounded-xl outline-none text-sm" }),
                             e('div', { className: "flex gap-3" },
                                 e('label', { className: "flex-1 flex items-center gap-2 bg-white/40 p-3 rounded-xl border border-white cursor-pointer" }, 
-                                    e('input', { type: "radio", name: "pay", value: "Наличными", defaultChecked: true, className: "accent-blue-600" }), e('span', { className: "text-xs font-bold" }, "Наличными")
+                                    e('input', { type: "radio", name: "pay", value: "Наличными", defaultChecked: true }), e('span', { className: "text-xs font-bold" }, "Наличными")
                                 ),
                                 e('label', { className: "flex-1 flex items-center gap-2 bg-white/40 p-3 rounded-xl border border-white cursor-pointer" }, 
-                                    e('input', { type: "radio", name: "pay", value: "Переводом", className: "accent-blue-600" }), e('span', { className: "text-xs font-bold" }, "Переводом")
+                                    e('input', { type: "radio", name: "pay", value: "Переводом" }), e('span', { className: "text-xs font-bold" }, "Переводом")
                                 )
                             ),
-                            e('div', { className: "flex justify-between items-center py-2" },
-                                e('span', { className: "text-slate-400 font-bold text-[10px] uppercase" }, "Итого"),
-                                e('span', { className: "text-2xl font-black" }, `${total} ₽`)
-                            ),
-                            e('button', { className: "w-full bg-blue-600 text-white py-4 rounded-2xl font-black text-lg shadow-xl shadow-blue-200" }, "Оформить")
+                            e('button', { className: "w-full bg-blue-600 text-white py-4 rounded-2xl font-black shadow-xl" }, `Оплатить ${total} ₽`)
                         )
                     )
                 )
