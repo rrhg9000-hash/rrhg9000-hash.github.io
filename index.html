@@ -45,18 +45,13 @@
         const { useState, useEffect, useMemo } = React;
         const e = React.createElement;
 
-        // Иконки через createElement
+        // Icons
         const CartIcon = () => e('svg', { className: "w-6 h-6", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, 
             e('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" }));
-        
         const SettingsIcon = () => e('svg', { className: "w-6 h-6", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, 
             e('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" }));
-        
         const PlusIcon = () => e('svg', { className: "w-5 h-5", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, 
             e('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "3", d: "M12 4v16m8-8H4" }));
-        
-        const TrashIcon = () => e('svg', { className: "w-5 h-5", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, 
-            e('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" }));
 
         function App() {
             const [user, setUser] = useState(null);
@@ -69,7 +64,7 @@
             const [isCartOpen, setIsCartOpen] = useState(false);
             const [currentCat, setCurrentCat] = useState('all');
             const [search, setSearch] = useState('');
-            const [authError, setAuthError] = useState(null);
+            const [errorType, setErrorType] = useState(null); 
 
             const tg = window.Telegram?.WebApp;
 
@@ -77,8 +72,7 @@
                 const init = async () => {
                     try {
                         await signInAnonymously(auth).catch(err => {
-                            if (err.code === 'auth/configuration-not-found') setAuthError("Anonymous Auth Not Enabled");
-                            else setAuthError(err.message);
+                            if (err.code === 'auth/configuration-not-found') setErrorType('auth');
                         });
 
                         onAuthStateChanged(auth, (fUser) => {
@@ -90,7 +84,6 @@
                             setLoading(false);
                         });
                     } catch (err) {
-                        setAuthError(err.message);
                         setLoading(false);
                     }
                 };
@@ -99,12 +92,26 @@
 
             useEffect(() => {
                 if (!user) return;
-                const unsubP = onSnapshot(collection(db, 'artifacts', APP_ID, 'public', 'data', 'products'), (s) => {
-                    setProducts(s.docs.map(d => ({ id: d.id, ...d.data() })));
-                });
-                const unsubC = onSnapshot(collection(db, 'artifacts', APP_ID, 'public', 'data', 'categories'), (s) => {
-                    setCategories(s.docs.map(d => ({ id: d.id, ...d.data() })));
-                });
+                
+                const unsubP = onSnapshot(
+                    collection(db, 'artifacts', APP_ID, 'public', 'data', 'products'), 
+                    (s) => setProducts(s.docs.map(d => ({ id: d.id, ...d.data() }))),
+                    (err) => {
+                        console.error("Firestore error:", err.code, err.message);
+                        if (err.code === 'permission-denied' || err.message.includes('Firestore API has not been used')) {
+                            setErrorType('firestore');
+                        }
+                    }
+                );
+                
+                const unsubC = onSnapshot(
+                    collection(db, 'artifacts', APP_ID, 'public', 'data', 'categories'), 
+                    (s) => setCategories(s.docs.map(d => ({ id: d.id, ...d.data() }))),
+                    (err) => {
+                        if (err.code === 'permission-denied') setErrorType('firestore');
+                    }
+                );
+                
                 return () => { unsubP(); unsubC(); };
             }, [user]);
 
@@ -123,12 +130,38 @@
                 (p.name || "").toLowerCase().includes(search.toLowerCase())
             );
 
-            if (authError === "Anonymous Auth Not Enabled") {
-                return e('div', { className: "min-h-screen bg-slate-900 text-white p-8 flex flex-col items-center justify-center text-center" },
-                    e('div', { className: "w-20 h-20 bg-amber-500 rounded-full flex items-center justify-center text-4xl mb-6" }, "🔑"),
-                    e('h1', { className: "text-2xl font-black mb-4" }, "Настройка Firebase"),
-                    e('p', { className: "text-slate-400 text-sm mb-8" }, "Включите Anonymous Auth в консоли Firebase (Authentication -> Sign-in method)."),
-                    e('button', { onClick: () => window.location.reload(), className: "bg-white text-slate-900 px-8 py-4 rounded-2xl font-black" }, "Обновить")
+            // UI for initialization errors
+            if (errorType) {
+                return e('div', { className: "min-h-screen bg-slate-900 text-white p-6 flex flex-col items-center justify-center" },
+                    e('div', { className: "w-20 h-20 bg-red-600 rounded-full flex items-center justify-center text-4xl mb-6 shadow-2xl animate-pulse" }, "🆘"),
+                    e('h1', { className: "text-2xl font-black mb-4 text-center" }, "Сервис Firebase не активирован"),
+                    
+                    e('div', { className: "bg-slate-800 p-6 rounded-3xl w-full max-w-md border border-slate-700 space-y-4 mb-6" },
+                        errorType === 'firestore' ? [
+                            e('p', { className: "text-red-400 font-bold" }, "Ошибка: Cloud Firestore API disabled"),
+                            e('p', { className: "text-sm text-slate-400" }, "Ваш проект Firebase создан, но база данных Firestore не активирована."),
+                            e('div', { className: "p-4 bg-slate-900 rounded-2xl border border-slate-700" },
+                                e('p', { className: "text-xs font-mono text-indigo-400 break-all mb-3" }, "https://console.firebase.google.com/project/iwtttlapr/firestore"),
+                                e('ol', { className: "text-sm text-slate-300 list-decimal pl-4 space-y-2" },
+                                    e('li', null, "Перейдите по ссылке выше"),
+                                    e('li', null, "Нажмите 'Create database'"),
+                                    e('li', null, "Выберите 'Start in test mode'"),
+                                    e('li', null, "Нажмите 'Enable'")
+                                )
+                            )
+                        ] : [
+                            e('p', { className: "text-amber-400 font-bold" }, "Ошибка: Anonymous Auth disabled"),
+                            e('ol', { className: "text-sm text-slate-300 list-decimal pl-4 space-y-2" },
+                                e('li', null, "В консоли Firebase откройте Authentication"),
+                                e('li', null, "Sign-in method -> Add new provider"),
+                                e('li', null, "Выберите Anonymous и включите его")
+                            )
+                        ]
+                    ),
+                    e('button', { 
+                        onClick: () => window.location.reload(), 
+                        className: "w-full max-w-md bg-white text-slate-900 py-4 rounded-2xl font-black active:scale-95 transition-all shadow-xl" 
+                    }, "Я ВСЁ ВКЛЮЧИЛ, ОБНОВИТЬ")
                 );
             }
 
@@ -154,21 +187,22 @@
                 ),
                 e('main', { className: "p-4 max-w-2xl mx-auto" },
                     view === 'catalog' ? e('div', { className: "space-y-6" },
-                        e('input', { className: "w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none", placeholder: "Поиск деталей...", onChange: (e) => setSearch(e.target.value) }),
+                        e('input', { className: "w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 ring-indigo-500/10 transition-all", placeholder: "Поиск деталей...", onChange: (e) => setSearch(e.target.value) }),
                         e('div', { className: "flex gap-2 overflow-x-auto no-scrollbar py-1" },
                             e('button', { onClick: () => setCurrentCat('all'), className: `px-6 py-2.5 rounded-xl font-bold text-sm whitespace-nowrap ${currentCat === 'all' ? 'bg-indigo-600 text-white' : 'bg-white border text-slate-500'}` }, "Все"),
                             categories.map(c => e('button', { key: c.id, onClick: () => setCurrentCat(c.name), className: `px-6 py-2.5 rounded-xl font-bold text-sm whitespace-nowrap ${currentCat === c.name ? 'bg-indigo-600 text-white' : 'bg-white border text-slate-500'}` }, c.name))
                         ),
                         e('div', { className: "grid grid-cols-2 gap-4" },
-                            filtered.map(p => e('div', { key: p.id, className: "bg-white rounded-[2rem] p-3 border border-slate-100 shadow-sm animate-fade flex flex-col h-full" },
+                            filtered.map(p => e('div', { key: p.id, className: "bg-white rounded-[2rem] p-3 border border-slate-100 shadow-sm animate-fade flex flex-col" },
                                 e('img', { src: p.img, className: "aspect-square rounded-[1.5rem] object-cover mb-3 bg-slate-50" }),
-                                e('h3', { className: "font-bold text-sm leading-tight text-slate-800 line-clamp-2 flex-1 mb-2" }, p.name),
-                                e('div', { className: "flex justify-between items-center" },
-                                    e('span', { className: "font-black text-indigo-600 text-lg" }, `${p.price} ₽`),
-                                    e('button', { onClick: () => addToCart(p), className: "bg-slate-900 text-white p-2 rounded-xl" }, e(PlusIcon))
+                                e('h3', { className: "font-bold text-sm leading-tight text-slate-800 line-clamp-2 mb-2 px-1" }, p.name),
+                                e('div', { className: "flex justify-between items-center mt-auto" },
+                                    e('span', { className: "font-black text-indigo-600 text-lg px-1" }, `${p.price} ₽`),
+                                    e('button', { onClick: () => addToCart(p), className: "bg-slate-900 text-white p-2.5 rounded-xl active:scale-90 transition-transform" }, e(PlusIcon))
                                 )
                             ))
-                        )
+                        ),
+                        filtered.length === 0 && e('div', { className: "text-center py-20 text-slate-400 italic" }, "Ничего не найдено")
                     ) : e('div', { className: "space-y-8 animate-fade pb-10" },
                         e('h2', { className: "text-3xl font-black" }, "Управление"),
                         e('form', { 
@@ -226,7 +260,8 @@
                                     e('span', { className: "font-black text-sm" }, item.qty),
                                     e('button', { onClick: () => setCart(cart.map(i => i.id === item.id ? {...i, qty: i.qty + 1} : i)), className: "text-indigo-600 font-bold p-1" }, "+")
                                 )
-                            ))
+                            )),
+                            cart.length === 0 && e('div', { className: "text-center py-10 text-slate-400 italic" }, "Ваша корзина пока пуста")
                         ),
                         e('div', { className: "mt-8 pt-8 border-t space-y-6" },
                             e('div', { className: "flex justify-between items-end" },
@@ -235,8 +270,9 @@
                             ),
                             e('button', { 
                                 onClick: () => { tg?.showAlert(`Заказ на ${total}₽ принят!`); setCart([]); setIsCartOpen(false); }, 
-                                className: "w-full bg-indigo-600 text-white py-5 rounded-[2rem] font-black text-xl active:scale-95 transition-transform shadow-xl shadow-indigo-200" 
-                            }, "Купить")
+                                disabled: cart.length === 0,
+                                className: "w-full bg-indigo-600 text-white py-5 rounded-[2rem] font-black text-xl active:scale-95 disabled:opacity-50 transition-all shadow-xl shadow-indigo-200" 
+                            }, "Оформить заказ")
                         )
                     )
                 )
