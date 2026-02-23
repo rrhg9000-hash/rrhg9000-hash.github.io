@@ -1,378 +1,303 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, 
-  signInAnonymously, 
-  onAuthStateChanged, 
-  signInWithCustomToken 
-} from 'firebase/auth';
-import { 
-  getFirestore, 
-  collection, 
-  doc, 
-  onSnapshot, 
-  deleteDoc,
-  addDoc
-} from 'firebase/firestore';
-
-/**
- * ПРИМЕЧАНИЕ: 
- * Ошибки "ReactDOM.createRoot is not a function" обычно связаны с версиями библиотек.
- * В этой среде мы экспортируем компонент App по умолчанию, а система сама рендерит его.
- */
-
-// Инициализация Firebase из глобальных переменных
-const firebaseConfig = JSON.parse(__firebase_config);
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'liquid-glass-shop';
-
-// ВАШ TELEGRAM ID ДЛЯ ДОСТУПА К АДМИНКЕ
-const ADMIN_TELEGRAM_ID = "7744774197"; 
-
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [view, setView] = useState('catalog');
-  const [products, setProducts] = useState([]);
-  const [categories, setCategories] = useState([]);
-  const [cart, setCart] = useState([]);
-  const [isCartOpen, setIsCartOpen] = useState(false);
-  const [currentCat, setCurrentCat] = useState('all');
-  const [search, setSearch] = useState('');
-
-  // Telegram WebApp API (проверка существования)
-  const tg = typeof window !== 'undefined' && window.Telegram ? window.Telegram.WebApp : null;
-
-  // 1. Аутентификация и проверка Telegram ID
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (err) {
-        console.error("Ошибка авторизации:", err);
-        setLoading(false);
-      }
-    };
-
-    initAuth();
-
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
-      
-      if (firebaseUser && tg) {
-        const tgData = tg.initDataUnsafe;
-        const tgUser = tgData?.user;
-
-        // Логика: админ только если ID совпадает и мы в Telegram
-        if (tgUser && String(tgUser.id) === String(ADMIN_TELEGRAM_ID)) {
-          setIsAdmin(true);
-        } else {
-          setIsAdmin(false);
-        }
-      }
-      setLoading(false);
-    });
-
-    if (tg) tg.ready();
-    return () => unsubscribe();
-  }, [tg]);
-
-  // 2. Загрузка данных из Firestore
-  useEffect(() => {
-    if (!user) return; 
-
-    const productsRef = collection(db, 'artifacts', appId, 'public', 'data', 'products');
-    const categoriesRef = collection(db, 'artifacts', appId, 'public', 'data', 'categories');
-
-    const unsubP = onSnapshot(productsRef, (snap) => {
-      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, (err) => console.error("Ошибка загрузки товаров:", err));
-
-    const unsubC = onSnapshot(categoriesRef, (snap) => {
-      setCategories(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, (err) => console.error("Ошибка загрузки категорий:", err));
-
-    return () => { unsubP(); unsubC(); };
-  }, [user]);
-
-  // Расчет корзины
-  const total = useMemo(() => cart.reduce((s, i) => s + (Number(i.price) * i.quantity), 0), [cart]);
-  
-  const addToCart = (p) => {
-    const exists = cart.find(item => item.id === p.id);
-    if (exists) {
-      setCart(cart.map(item => item.id === p.id ? { ...item, quantity: item.quantity + 1 } : item));
-    } else {
-      setCart([...cart, { ...p, quantity: 1 }]);
-    }
-    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
-  };
-
-  const changeQty = (id, delta) => {
-    setCart(cart.map(i => i.id === id ? { ...i, quantity: i.quantity + delta } : i).filter(i => i.quantity > 0));
-  };
-
-  // Админ-функции
-  const addProduct = async (e) => {
-    e.preventDefault();
-    if (!isAdmin) return;
-    const f = e.target;
-    try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), {
-        name: f.name.value,
-        price: Number(f.price.value),
-        img: f.img.value,
-        category: f.category.value,
-        createdAt: Date.now()
-      });
-      f.reset();
-    } catch (e) { console.error(e); }
-  };
-
-  const deleteProduct = async (id) => {
-    if (!isAdmin) return;
-    try {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', id));
-    } catch (e) { console.error(e); }
-  };
-
-  const addCategory = async (e) => {
-    e.preventDefault();
-    if (!isAdmin) return;
-    const name = e.target.cat.value.trim();
-    try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'categories'), { name });
-      e.target.reset();
-    } catch (e) { console.error(e); }
-  };
-
-  // Фильтрация
-  const filtered = products.filter(p => 
-    (currentCat === 'all' || p.category === currentCat) && 
-    (p.name || "").toLowerCase().includes(search.toLowerCase())
-  );
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
-        <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-[#f8fafc] text-[#1e293b] font-sans pb-24">
-      {/* Навигация */}
-      <nav className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200 px-4 py-3 flex justify-between items-center">
-        <div className="flex items-center gap-2 cursor-pointer" onClick={() => setView('catalog')}>
-          <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold shadow-lg">LG</div>
-          <span className="font-black text-xl tracking-tight">Liquid Glass</span>
-        </div>
-        
-        <div className="flex items-center gap-2">
-          {isAdmin && (
-            <button 
-              onClick={() => setView('admin')} 
-              className={`p-2.5 rounded-xl transition-all ${view === 'admin' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}
-            >
-              <SettingsIcon />
-            </button>
-          )}
-          
-          <button onClick={() => setIsCartOpen(true)} className="relative p-2.5 bg-slate-100 rounded-xl text-slate-600">
-            <CartIcon />
-            {cart.length > 0 && (
-              <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[10px] w-5 h-5 rounded-full flex items-center justify-center font-bold border-2 border-white">
-                {cart.reduce((a, b) => a + b.quantity, 0)}
-              </span>
-            )}
-          </button>
-        </div>
-      </nav>
-
-      <main className="max-w-xl mx-auto px-4 py-6">
-        {view === 'catalog' && (
-          <div className="space-y-6">
-            {/* Поиск */}
-            <div className="relative">
-              <input 
-                type="text" 
-                placeholder="Поиск товаров..." 
-                className="w-full p-4 pl-12 bg-white border border-slate-200 shadow-sm rounded-2xl outline-none focus:ring-2 ring-indigo-500/20"
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
-                <SearchIcon />
-              </div>
-            </div>
-
-            {/* Категории */}
-            <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
-              <button 
-                onClick={() => setCurrentCat('all')}
-                className={`px-6 py-2.5 rounded-xl text-sm font-bold whitespace-nowrap transition-all ${currentCat === 'all' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-500'}`}
-              >
-                Все
-              </button>
-              {categories.map(c => (
-                <button 
-                  key={c.id}
-                  onClick={() => setCurrentCat(c.name)}
-                  className={`px-6 py-2.5 rounded-xl text-sm font-bold whitespace-nowrap transition-all ${currentCat === c.name ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-500'}`}
-                >
-                  {c.name}
-                </button>
-              ))}
-            </div>
-
-            {/* Список товаров */}
-            <div className="grid grid-cols-2 gap-4">
-              {filtered.map(p => (
-                <div key={p.id} className="bg-white rounded-3xl p-3 border border-slate-100 shadow-sm flex flex-col group active:scale-[0.98] transition-transform">
-                  <div className="relative overflow-hidden rounded-2xl mb-3 aspect-square bg-slate-50">
-                    <img src={p.img} className="w-full h-full object-cover" alt={p.name} loading="lazy" />
-                  </div>
-                  <div className="flex-1">
-                    <p className="text-[10px] uppercase font-bold text-indigo-500 mb-1">{p.category}</p>
-                    <h3 className="font-bold text-sm text-slate-800 line-clamp-2 h-10 mb-2 leading-tight">{p.name}</h3>
-                  </div>
-                  <div className="flex items-center justify-between mt-auto">
-                    <span className="font-black text-lg">{p.price} ₽</span>
-                    <button onClick={() => addToCart(p)} className="bg-indigo-600 text-white p-2.5 rounded-xl shadow-md active:bg-indigo-700">
-                      <PlusIcon />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            {filtered.length === 0 && <div className="text-center py-10 opacity-40 font-medium">Ничего не нашли...</div>}
-          </div>
-        )}
-
-        {view === 'admin' && isAdmin && (
-          <div className="space-y-6 animate-in fade-in duration-500">
-            <div className="flex items-center justify-between">
-              <h1 className="text-2xl font-black">Админ-панель</h1>
-              <button onClick={() => setView('catalog')} className="text-indigo-600 font-bold text-sm bg-indigo-50 px-4 py-2 rounded-xl">К товарам</button>
-            </div>
-
-            <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm">
-              <h2 className="text-lg font-bold mb-4 text-slate-400 uppercase text-xs tracking-widest">Новый товар</h2>
-              <form onSubmit={addProduct} className="space-y-3">
-                <input name="name" placeholder="Название" required className="w-full p-3.5 bg-slate-50 border-none rounded-xl" />
-                <div className="grid grid-cols-2 gap-3">
-                  <input name="price" type="number" placeholder="Цена" required className="w-full p-3.5 bg-slate-50 border-none rounded-xl" />
-                  <select name="category" className="w-full p-3.5 bg-slate-50 border-none rounded-xl">
-                    <option value="Разное">Категория</option>
-                    {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                  </select>
-                </div>
-                <input name="img" placeholder="URL фото" required className="w-full p-3.5 bg-slate-50 border-none rounded-xl" />
-                <button className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold active:scale-[0.99]">Опубликовать</button>
-              </form>
-            </div>
-
-            <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm">
-              <h2 className="text-lg font-bold mb-4 text-slate-400 uppercase text-xs tracking-widest">Категории</h2>
-              <form onSubmit={addCategory} className="flex gap-2">
-                <input name="cat" placeholder="Название..." required className="flex-1 p-3.5 bg-slate-50 border-none rounded-xl" />
-                <button className="bg-indigo-600 text-white px-6 rounded-xl font-bold">ОК</button>
-              </form>
-            </div>
-
-            <div className="space-y-2">
-              <h2 className="text-lg font-bold px-2">Управление товарами ({products.length})</h2>
-              {products.map(p => (
-                <div key={p.id} className="bg-white p-3 rounded-2xl flex items-center justify-between shadow-sm border border-slate-50">
-                  <div className="flex items-center gap-3">
-                    <img src={p.img} className="w-12 h-12 rounded-xl object-cover" alt="" />
-                    <div>
-                      <p className="font-bold text-sm">{p.name}</p>
-                      <p className="text-xs text-indigo-500 font-bold">{p.price} ₽</p>
-                    </div>
-                  </div>
-                  <button onClick={() => deleteProduct(p.id)} className="p-2 text-rose-500 bg-rose-50 rounded-lg">
-                    <TrashIcon />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </main>
-
-      {/* Модальное окно корзины */}
-      {isCartOpen && (
-        <div className="fixed inset-0 z-[100] flex justify-end">
-          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setIsCartOpen(false)} />
-          <div className="relative w-full max-w-sm bg-white h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
-            <div className="p-6 border-b flex justify-between items-center">
-              <h2 className="text-2xl font-black">Корзина</h2>
-              <button onClick={() => setIsCartOpen(false)} className="w-10 h-10 flex items-center justify-center bg-slate-100 rounded-xl">✕</button>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              {cart.length === 0 ? (
-                <div className="text-center py-20 opacity-30 italic">В корзине пока ничего нет</div>
-              ) : cart.map(item => (
-                <div key={item.id} className="flex gap-4 items-center p-2 bg-slate-50 rounded-2xl">
-                  <img src={item.img} className="w-16 h-16 rounded-xl object-cover" alt="" />
-                  <div className="flex-1">
-                    <h4 className="font-bold text-sm line-clamp-1">{item.name}</h4>
-                    <p className="text-indigo-600 font-black text-sm">{item.price} ₽</p>
-                    <div className="flex items-center gap-3 mt-1">
-                      <button onClick={() => changeQty(item.id, -1)} className="w-7 h-7 bg-white shadow-sm rounded-md flex items-center justify-center font-bold">-</button>
-                      <span className="text-sm font-bold">{item.quantity}</span>
-                      <button onClick={() => changeQty(item.id, 1)} className="w-7 h-7 bg-white shadow-sm rounded-md flex items-center justify-center font-bold">+</button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="p-6 bg-slate-50 border-t space-y-4">
-              <div className="flex justify-between items-baseline">
-                <span className="text-slate-400 font-bold text-xs">ИТОГО К ОПЛАТЕ:</span>
-                <span className="text-3xl font-black">{total} ₽</span>
-              </div>
-              <button 
-                disabled={cart.length === 0}
-                className="w-full bg-indigo-600 text-white py-5 rounded-2xl font-black text-lg disabled:opacity-50 shadow-lg shadow-indigo-100 active:scale-[0.98]"
-                onClick={() => {
-                  if (tg?.showAlert) {
-                    tg.showAlert(`Спасибо за заказ на сумму ${total} ₽!`);
-                  } else {
-                    alert('Заказ принят!');
-                  }
-                  setCart([]);
-                  setIsCartOpen(false);
-                }}
-              >
-                Оформить заказ
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <style>{`
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Liquid Glass Market</title>
+    <!-- Telegram SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Библиотеки -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-      `}</style>
-    </div>
-  );
-}
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade { animation: fadeIn 0.4s ease-out forwards; }
+    </style>
+</head>
+<body class="bg-slate-50 font-sans antialiased text-slate-900">
+    <div id="root"></div>
 
-// SVG Иконки
-function CartIcon() { return <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" /></svg>; }
-function SettingsIcon() { return <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" /></svg>; }
-function PlusIcon() { return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 4v16m8-8H4" /></svg>; }
-function TrashIcon() { return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>; }
-function SearchIcon() { return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>; }
+    <!-- Загрузка Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getFirestore, collection, doc, onSnapshot, addDoc, deleteDoc, query, orderBy } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        window.FB = { initializeApp, getAuth, signInAnonymously, onAuthStateChanged, getFirestore, collection, doc, onSnapshot, addDoc, deleteDoc, query, orderBy };
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyC08ZGzI_U2M7LHz-EG07PWXOx6YWedn7s",
+            authDomain: "iwtttlapr.firebaseapp.com",
+            projectId: "iwtttlapr",
+            storageBucket: "iwtttlapr.firebasestorage.app",
+            messagingSenderId: "913975474144",
+            appId: "1:913975474144:web:b140db25bca5e153ca9d85",
+            measurementId: "G-YFXH2W76KS"
+        };
+
+        const ADMIN_TELEGRAM_ID = "7744774197"; 
+        const APP_ID = "liquid-glass-shop";
+
+        // Иконки
+        const CartIcon = () => <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" /></svg>;
+        const SettingsIcon = () => <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" /></svg>;
+        const PlusIcon = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 4v16m8-8H4" /></svg>;
+        const TrashIcon = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>;
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [db, setDb] = useState(null);
+            const [isAdmin, setIsAdmin] = useState(false);
+            const [loading, setLoading] = useState(true);
+            const [view, setView] = useState('catalog');
+            const [products, setProducts] = useState([]);
+            const [categories, setCategories] = useState([]);
+            const [cart, setCart] = useState([]);
+            const [isCartOpen, setIsCartOpen] = useState(false);
+            const [currentCat, setCurrentCat] = useState('all');
+            const [search, setSearch] = useState('');
+            const [authError, setAuthError] = useState(null);
+
+            const tg = window.Telegram?.WebApp;
+
+            useEffect(() => {
+                const initFirebase = async () => {
+                    try {
+                        const app = FB.initializeApp(firebaseConfig);
+                        const auth = FB.getAuth(app);
+                        const firestore = FB.getFirestore(app);
+                        setDb(firestore);
+                        
+                        // Попытка входа
+                        await FB.signInAnonymously(auth).catch(e => {
+                            if (e.code === 'auth/configuration-not-found') {
+                                setAuthError("Anonymous Auth Not Enabled");
+                            } else {
+                                setAuthError(e.message);
+                            }
+                        });
+
+                        FB.onAuthStateChanged(auth, (fUser) => {
+                            setUser(fUser);
+                            if (fUser) {
+                                const tgUser = tg?.initDataUnsafe?.user;
+                                if (tgUser && String(tgUser.id) === ADMIN_TELEGRAM_ID) setIsAdmin(true);
+                            }
+                            setLoading(false);
+                        });
+                    } catch (err) {
+                        setAuthError(err.message);
+                        setLoading(false);
+                    }
+                };
+                initFirebase();
+            }, []);
+
+            useEffect(() => {
+                if (!db || !user) return;
+                const unsubP = FB.onSnapshot(FB.collection(db, 'artifacts', APP_ID, 'public', 'data', 'products'), (s) => {
+                    setProducts(s.docs.map(d => ({ id: d.id, ...d.data() })));
+                });
+                const unsubC = FB.onSnapshot(FB.collection(db, 'artifacts', APP_ID, 'public', 'data', 'categories'), (s) => {
+                    setCategories(s.docs.map(d => ({ id: d.id, ...d.data() })));
+                });
+                return () => { unsubP(); unsubC(); };
+            }, [db, user]);
+
+            const addToCart = (p) => {
+                setCart(prev => {
+                    const exists = prev.find(i => i.id === p.id);
+                    if (exists) return prev.map(i => i.id === p.id ? {...i, qty: i.qty + 1} : i);
+                    return [...prev, {...p, qty: 1}];
+                });
+                tg?.HapticFeedback?.impactOccurred('light');
+            };
+
+            const total = useMemo(() => cart.reduce((s, i) => s + (Number(i.price) * i.qty), 0), [cart]);
+
+            // Экран инструкции при ошибке
+            if (authError === "Anonymous Auth Not Enabled") return (
+                <div className="min-h-screen bg-slate-900 text-white p-8 flex flex-col items-center justify-center text-center">
+                    <div className="w-20 h-20 bg-amber-500 rounded-full flex items-center justify-center text-4xl mb-6 shadow-lg shadow-amber-500/20">🔑</div>
+                    <h1 className="text-2xl font-black mb-4">Нужна настройка Firebase</h1>
+                    <p className="text-slate-400 text-sm mb-8 leading-relaxed">
+                        Вы не включили анонимный вход в консоли. Без этого база данных не пропустит пользователей.
+                    </p>
+                    <div className="bg-slate-800 p-6 rounded-3xl text-left w-full max-w-sm border border-slate-700 space-y-4 mb-8">
+                        <div className="flex gap-3">
+                            <span className="bg-indigo-600 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0">1</span>
+                            <p className="text-sm">Зайдите в раздел <b className="text-indigo-400">Authentication</b></p>
+                        </div>
+                        <div className="flex gap-3">
+                            <span className="bg-indigo-600 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0">2</span>
+                            <p className="text-sm">Вкладка <b className="text-indigo-400">Sign-in method</b></p>
+                        </div>
+                        <div className="flex gap-3">
+                            <span className="bg-indigo-600 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0">3</span>
+                            <p className="text-sm">Нажмите <b className="text-indigo-400">Add new provider</b></p>
+                        </div>
+                        <div className="flex gap-3">
+                            <span className="bg-indigo-600 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0">4</span>
+                            <p className="text-sm">Выберите <b className="text-indigo-400">Anonymous</b> и нажмите <b className="text-indigo-400">Enable</b></p>
+                        </div>
+                    </div>
+                    <button onClick={() => window.location.reload()} className="bg-white text-slate-900 px-8 py-4 rounded-2xl font-black active:scale-95 transition-transform shadow-xl">Я ВСЁ СДЕЛАЛ, ОБНОВИТЬ</button>
+                </div>
+            );
+
+            if (loading) return <div className="h-screen flex items-center justify-center bg-white font-bold text-indigo-600 animate-pulse">Загрузка...</div>;
+
+            return (
+                <div className="min-h-screen pb-20">
+                    <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-xl border-b px-4 py-3 flex justify-between items-center">
+                        <div className="flex items-center gap-2" onClick={() => setView('catalog')}>
+                            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black">LG</div>
+                            <span className="font-black text-lg uppercase tracking-tighter">Market</span>
+                        </div>
+                        <div className="flex gap-2">
+                            {isAdmin && (
+                                <button onClick={() => setView('admin')} className={`p-2.5 rounded-xl ${view === 'admin' ? 'bg-indigo-600 text-white' : 'bg-slate-100'}`}>
+                                    <SettingsIcon />
+                                </button>
+                            )}
+                            <button onClick={() => setIsCartOpen(true)} className="relative p-2.5 bg-slate-900 text-white rounded-xl shadow-lg shadow-slate-200">
+                                <CartIcon />
+                                {cart.length > 0 && <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] w-5 h-5 rounded-full flex items-center justify-center font-bold border-2 border-white">{cart.reduce((a, b) => a + b.qty, 0)}</span>}
+                            </button>
+                        </div>
+                    </header>
+
+                    <main className="p-4 max-w-2xl mx-auto">
+                        {view === 'catalog' ? (
+                            <div className="space-y-6">
+                                <input className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 ring-indigo-500/10" placeholder="Поиск деталей..." onChange={(e) => setSearch(e.target.value)} />
+                                <div className="flex gap-2 overflow-x-auto no-scrollbar py-1">
+                                    <button onClick={() => setCurrentCat('all')} className={`px-6 py-2.5 rounded-xl font-bold text-sm whitespace-nowrap ${currentCat === 'all' ? 'bg-indigo-600 text-white' : 'bg-white border text-slate-500'}`}>Все</button>
+                                    {categories.map(c => (
+                                        <button key={c.id} onClick={() => setCurrentCat(c.name)} className={`px-6 py-2.5 rounded-xl font-bold text-sm whitespace-nowrap ${currentCat === c.name ? 'bg-indigo-600 text-white' : 'bg-white border text-slate-500'}`}>{c.name}</button>
+                                    ))}
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    {filtered.map(p => (
+                                        <div key={p.id} className="bg-white rounded-[2rem] p-3 border border-slate-100 shadow-sm animate-fade flex flex-col h-full">
+                                            <img src={p.img} className="aspect-square rounded-[1.5rem] object-cover mb-3 bg-slate-50" />
+                                            <h3 className="font-bold text-sm leading-tight text-slate-800 line-clamp-2 flex-1 mb-2">{p.name}</h3>
+                                            <div className="flex justify-between items-center">
+                                                <span className="font-black text-indigo-600 text-lg">{p.price} ₽</span>
+                                                <button onClick={() => addToCart(p)} className="bg-slate-900 text-white p-2 rounded-xl"><PlusIcon /></button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="space-y-8 animate-fade pb-10">
+                                <h2 className="text-3xl font-black">Управление</h2>
+                                <form onSubmit={async (e) => {
+                                    e.preventDefault();
+                                    await FB.addDoc(FB.collection(db, 'artifacts', APP_ID, 'public', 'data', 'categories'), { name: e.target.catname.value });
+                                    e.target.reset();
+                                }} className="bg-white p-6 rounded-[2rem] border shadow-sm flex gap-2">
+                                    <input name="catname" placeholder="Новая категория" required className="flex-1 p-4 bg-slate-50 rounded-2xl outline-none" />
+                                    <button className="bg-indigo-600 text-white px-6 rounded-2xl font-bold">+</button>
+                                </form>
+                                <form onSubmit={async (e) => {
+                                    e.preventDefault();
+                                    const f = e.target;
+                                    await FB.addDoc(FB.collection(db, 'artifacts', APP_ID, 'public', 'data', 'products'), {
+                                        name: f.pname.value,
+                                        price: Number(f.pprice.value),
+                                        img: f.pimg.value,
+                                        category: f.pcat.value,
+                                        createdAt: Date.now()
+                                    });
+                                    f.reset();
+                                }} className="bg-white p-6 rounded-[2rem] border shadow-sm space-y-4">
+                                    <input name="pname" placeholder="Название товара" required className="w-full p-4 bg-slate-50 rounded-2xl outline-none" />
+                                    <div className="flex gap-4">
+                                        <input name="pprice" type="number" placeholder="Цена" required className="flex-1 p-4 bg-slate-50 rounded-2xl outline-none" />
+                                        <select name="pcat" className="flex-1 p-4 bg-slate-50 rounded-2xl outline-none">
+                                            {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                                        </select>
+                                    </div>
+                                    <input name="pimg" placeholder="URL картинки" required className="w-full p-4 bg-slate-50 rounded-2xl outline-none" />
+                                    <button className="w-full bg-slate-900 text-white py-5 rounded-[1.5rem] font-black text-lg shadow-xl">Добавить товар</button>
+                                </form>
+                                <div className="space-y-3">
+                                    {products.map(p => (
+                                        <div key={p.id} className="bg-white p-4 rounded-3xl flex items-center justify-between border shadow-sm">
+                                            <div className="flex items-center gap-4">
+                                                <img src={p.img} className="w-12 h-12 rounded-xl object-cover" />
+                                                <div className="flex flex-col">
+                                                    <span className="text-sm font-bold truncate max-w-[150px]">{p.name}</span>
+                                                    <span className="text-xs text-indigo-500">{p.price} ₽</span>
+                                                </div>
+                                            </div>
+                                            <button onClick={() => FB.deleteDoc(FB.doc(db, 'artifacts', APP_ID, 'public', 'data', 'products', p.id))} className="text-red-500 p-3 bg-red-50 rounded-2xl"><TrashIcon /></button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {isCartOpen && (
+                        <div className="fixed inset-0 z-50 flex items-end justify-center">
+                            <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-md" onClick={() => setIsCartOpen(false)} />
+                            <div className="relative bg-white w-full max-w-2xl rounded-t-[3rem] p-8 max-h-[90vh] flex flex-col animate-fade shadow-2xl">
+                                <div className="w-16 h-1.5 bg-slate-100 rounded-full mx-auto mb-8" onClick={() => setIsCartOpen(false)} />
+                                <h2 className="text-3xl font-black mb-8">Корзина</h2>
+                                <div className="flex-1 overflow-y-auto space-y-4 no-scrollbar">
+                                    {cart.map(item => (
+                                        <div key={item.id} className="flex gap-4 items-center bg-slate-50 p-4 rounded-3xl">
+                                            <img src={item.img} className="w-16 h-16 rounded-2xl object-cover" />
+                                            <div className="flex-1">
+                                                <div className="font-bold text-sm text-slate-800 leading-tight">{item.name}</div>
+                                                <div className="text-indigo-600 font-black">{item.price} ₽</div>
+                                            </div>
+                                            <div className="flex items-center gap-3 bg-white px-3 py-1 rounded-xl shadow-sm">
+                                                <button onClick={() => setCart(cart.map(i => i.id === item.id ? {...i, qty: Math.max(0, i.qty - 1)} : i).filter(i => i.qty > 0))} className="text-slate-300 font-bold p-1">−</button>
+                                                <span className="font-black text-sm">{item.qty}</span>
+                                                <button onClick={() => setCart(cart.map(i => i.id === item.id ? {...i, qty: i.qty + 1} : i))} className="text-indigo-600 font-bold p-1">+</button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {cart.length === 0 && <div className="text-center py-20 text-slate-400 font-bold italic">Пусто</div>}
+                                </div>
+                                <div className="mt-8 pt-8 border-t space-y-6">
+                                    <div className="flex justify-between items-end">
+                                        <span className="text-slate-400 font-bold text-xs uppercase tracking-widest">Итого к оплате</span>
+                                        <span className="text-4xl font-black text-slate-900 tracking-tighter">{total} ₽</span>
+                                    </div>
+                                    <button 
+                                        className="w-full bg-indigo-600 text-white py-5 rounded-[2rem] font-black text-xl disabled:opacity-30 shadow-2xl shadow-indigo-200 active:scale-[0.98] transition-all"
+                                        onClick={() => {
+                                            tg?.showAlert(`Заказ на сумму ${total}₽ принят!`);
+                                            setCart([]);
+                                            setIsCartOpen(false);
+                                        }}
+                                        disabled={cart.length === 0}
+                                    >
+                                        Купить
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
