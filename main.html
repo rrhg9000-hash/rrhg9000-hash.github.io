@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SimpleShop Liquid Glass</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
+        
+        :root {
+            --glass-bg: rgba(255, 255, 255, 0.45);
+            --glass-border: rgba(255, 255, 255, 0.7);
+            --liquid-blue: #3b82f6;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: linear-gradient(135deg, #e0e7ff 0%, #f3f4f6 50%, #dbeafe 100%);
+            background-attachment: fixed;
+            min-height: 100vh;
+        }
+
+        /* Анимированный фон */
+        .bg-blob {
+            position: fixed;
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.12) 0%, rgba(59, 130, 246, 0) 70%);
+            filter: blur(100px);
+            z-index: -1;
+            animation: move 25s infinite alternate;
+        }
+
+        @keyframes move {
+            from { transform: translate(-20%, -20%); }
+            to { transform: translate(30%, 30%); }
+        }
+
+        .liquid-glass {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.05);
+        }
+
+        .product-card, .checkout-card {
+            background: rgba(255, 255, 255, 0.55);
+            backdrop-filter: blur(14px);
+            border: 1px solid rgba(255, 255, 255, 0.8);
+            border-radius: 32px;
+            transition: all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
+        }
+
+        .product-card:hover {
+            transform: translateY(-8px);
+            background: rgba(255, 255, 255, 0.8);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.04);
+        }
+
+        .cart-drawer {
+            transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+            transform: translateX(110%);
+            background: rgba(255, 255, 255, 0.75);
+            backdrop-filter: blur(40px) saturate(200%);
+        }
+
+        .cart-drawer.open {
+            transform: translateX(0);
+        }
+
+        .btn-liquid {
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            box-shadow: 0 10px 25px rgba(37, 99, 235, 0.25);
+            border-radius: 20px;
+            transition: all 0.3s ease;
+        }
+
+        .btn-liquid:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 30px rgba(37, 99, 235, 0.4);
+        }
+
+        .input-glass {
+            background: rgba(255, 255, 255, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            backdrop-filter: blur(5px);
+            transition: all 0.3s ease;
+        }
+
+        .input-glass:focus {
+            background: rgba(255, 255, 255, 0.8);
+            border-color: #3b82f6;
+            outline: none;
+            box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1);
+        }
+
+        .toast {
+            background: rgba(15, 23, 42, 0.9);
+            backdrop-filter: blur(12px);
+            border-radius: 24px;
+            animation: slideInUp 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+
+        @keyframes slideInUp {
+            from { transform: translateY(100%) scale(0.9); opacity: 0; }
+            to { transform: translateY(0) scale(1); opacity: 1; }
+        }
+
+        .view-hidden { display: none; }
+    </style>
+</head>
+<body class="text-slate-800">
+
+    <div class="bg-blob"></div>
+
+    <!-- Уведомления -->
+    <div id="toastContainer" class="fixed bottom-8 right-8 z-[100] flex flex-col gap-3"></div>
+
+    <!-- Навигация -->
+    <nav class="sticky top-4 z-40 px-4">
+        <div class="max-w-7xl mx-auto liquid-glass rounded-[32px] px-6 py-4 flex justify-between items-center">
+            <div class="flex items-center gap-3 cursor-pointer" onclick="navigateTo('catalog')">
+                <div class="w-10 h-10 bg-blue-600 flex items-center justify-center rounded-2xl shadow-lg">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M16 11V7a4 4 0 11-8 0m-4 8v2a2 2 0 012 2h10a2 2 0 012-2v-5a2 2 0 01-2-2H5a2 2 0 01-2 2z" />
+                    </svg>
+                </div>
+                <h1 class="text-2xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-blue-500">LiquidShop</h1>
+            </div>
+            
+            <div id="searchContainer" class="flex-1 max-w-lg mx-12 hidden md:block">
+                <input type="text" id="searchInput" placeholder="Поиск товаров..." 
+                       class="w-full px-6 py-3 bg-white/40 border-none rounded-2xl focus:ring-4 focus:ring-blue-100 transition-all backdrop-blur-sm">
+            </div>
+
+            <button onclick="toggleCart()" class="relative p-3 bg-white/50 hover:bg-white rounded-2xl transition-all shadow-sm">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+                <span id="cartCount" class="absolute -top-1 -right-1 bg-blue-600 text-white text-[11px] font-black w-6 h-6 flex items-center justify-center rounded-full border-4 border-white hidden">0</span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- Представление: Каталог -->
+    <div id="view-catalog" class="view-main max-w-7xl mx-auto px-6 py-12">
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-12 gap-6">
+            <div id="categoryFilters" class="flex flex-wrap gap-3 p-1.5 bg-white/30 backdrop-blur-md rounded-[24px] border border-white/50"></div>
+            <select id="sortSelect" onchange="renderProducts()" class="bg-white/30 backdrop-blur-md px-4 py-2 rounded-2xl border border-white/50 text-sm font-bold text-blue-600 focus:ring-0 cursor-pointer">
+                <option value="new">По умолчанию</option>
+                <option value="cheap">Дешевле</option>
+                <option value="expensive">Дороже</option>
+            </select>
+        </div>
+        <div id="productGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-10"></div>
+    </div>
+
+    <!-- Представление: Оформление заказа -->
+    <div id="view-checkout" class="view-main max-w-3xl mx-auto px-6 py-12 view-hidden">
+        <button onclick="navigateTo('catalog')" class="flex items-center gap-2 text-slate-500 font-bold mb-8 hover:text-blue-600 transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" /></svg>
+            Вернуться в магазин
+        </button>
+
+        <div class="checkout-card p-8 md:p-12 shadow-2xl">
+            <h2 class="text-4xl font-black mb-8 tracking-tight">Оформление</h2>
+            
+            <form id="checkoutForm" onsubmit="handleOrderSubmit(event)" class="space-y-8">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="space-y-2">
+                        <label class="text-xs font-black uppercase tracking-widest text-slate-400 ml-1">Имя получателя</label>
+                        <input type="text" id="nameInput" required class="input-glass w-full px-5 py-4 rounded-2xl font-semibold" placeholder="Иван Иванов">
+                    </div>
+                    <div class="space-y-2">
+                        <label class="text-xs font-black uppercase tracking-widest text-slate-400 ml-1">Телефон</label>
+                        <input type="tel" required class="input-glass w-full px-5 py-4 rounded-2xl font-semibold" placeholder="+7 (999) 000-00-00">
+                    </div>
+                </div>
+
+                <div class="space-y-2">
+                    <label class="text-xs font-black uppercase tracking-widest text-slate-400 ml-1">Адрес доставки</label>
+                    <input type="text" required class="input-glass w-full px-5 py-4 rounded-2xl font-semibold" placeholder="Город, улица, дом, квартира">
+                </div>
+
+                <!-- Выбор способа оплаты -->
+                <div class="space-y-3">
+                    <label class="text-xs font-black uppercase tracking-widest text-slate-400 ml-1">Способ оплаты</label>
+                    <div class="grid grid-cols-2 gap-4">
+                        <label class="cursor-pointer relative">
+                            <input type="radio" name="payment" value="card" class="peer sr-only" checked>
+                            <div class="input-glass p-4 rounded-2xl flex flex-col items-center gap-2 border-2 border-transparent peer-checked:border-blue-500 peer-checked:bg-white/80 transition-all">
+                                <svg class="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"></path></svg>
+                                <span class="font-bold text-sm text-slate-700">Картой онлайн</span>
+                            </div>
+                        </label>
+                        <label class="cursor-pointer relative">
+                            <input type="radio" name="payment" value="cash" class="peer sr-only">
+                            <div class="input-glass p-4 rounded-2xl flex flex-col items-center gap-2 border-2 border-transparent peer-checked:border-blue-500 peer-checked:bg-white/80 transition-all">
+                                <svg class="w-8 h-8 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+                                <span class="font-bold text-sm text-slate-700">Наличными</span>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="pt-6 border-t border-white/50">
+                    <div class="flex justify-between items-center mb-6">
+                        <span class="text-slate-500 font-bold">Сумма заказа:</span>
+                        <span id="checkoutTotal" class="text-3xl font-black">0 ₽</span>
+                    </div>
+                    <button type="submit" class="btn-liquid w-full text-white py-5 rounded-[24px] font-black text-xl active:scale-[0.98]">
+                        Подтвердить заказ
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Сайдбар корзины -->
+    <div id="cartOverlay" onclick="toggleCart()" class="fixed inset-0 bg-slate-900/10 backdrop-blur-sm z-[50] hidden"></div>
+    <div id="cartDrawer" class="cart-drawer fixed right-0 top-0 h-full w-full max-w-md z-[60] flex flex-col border-l border-white/50">
+        <div class="p-8 border-b border-white/50 flex justify-between items-center">
+            <h2 class="text-3xl font-black">Корзина</h2>
+            <button onclick="toggleCart()" class="p-3 hover:bg-white/50 rounded-2xl transition-all">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+        </div>
+        <div id="cartItems" class="flex-1 overflow-y-auto p-8 space-y-6"></div>
+        <div class="p-8 border-t border-white/50 space-y-6">
+            <div class="flex justify-between items-center">
+                <span class="text-slate-400 font-bold uppercase text-xs tracking-widest">Итого</span>
+                <span id="cartTotal" class="text-3xl font-black">0 ₽</span>
+            </div>
+            <button onclick="goToCheckout()" class="btn-liquid w-full text-white py-5 rounded-[24px] font-black text-lg">
+                К оформлению
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand(); // Растягиваем на всю высоту в Telegram
+
+        const products = [
+            { id: 1, name: "Смартфон Pro Max", price: 89000, category: "Гаджеты", img: "https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?auto=format&fit=crop&w=600&q=80" },
+            { id: 2, name: "Наушники Studio", price: 12500, category: "Аудио", img: "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=600&q=80" },
+            { id: 3, name: "Лампа Minimalist", price: 4200, category: "Свет", img: "https://images.unsplash.com/photo-1507473885765-e6ed057f782c?auto=format&fit=crop&w=600&q=80" },
+            { id: 4, name: "Клавиатура Neon", price: 18000, category: "Гаджеты", img: "https://images.unsplash.com/photo-1511467687858-23d96c32e4ae?auto=format&fit=crop&w=600&q=80" },
+            { id: 5, name: "Камера X-100", price: 65900, category: "Фото", img: "https://images.unsplash.com/photo-1516035069371-29a1b244cc32?auto=format&fit=crop&w=600&q=80" },
+            { id: 6, name: "Часы Horizon", price: 25400, category: "Аксессуары", img: "https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=600&q=80" },
+            { id: 7, name: "Рюкзак Urban", price: 7800, category: "Аксессуары", img: "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?auto=format&fit=crop&w=600&q=80" },
+            { id: 8, name: "Мышь Ergo", price: 3900, category: "Гаджеты", img: "https://images.unsplash.com/photo-1527864550417-7fd91fc51a46?auto=format&fit=crop&w=600&q=80" }
+        ];
+
+        let cart = JSON.parse(localStorage.getItem('cart_liquid_v2')) || [];
+        let currentCategory = 'all';
+        let mainButtonCallback = null;
+
+        // Настройка главной кнопки Telegram
+        function setupMainButton() {
+            if (cart.length === 0) {
+                tg.MainButton.hide();
+                return;
+            }
+
+            const total = cart.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+            const isCartOpen = document.getElementById('cartDrawer').classList.contains('open');
+            const isCheckout = !document.getElementById('view-checkout').classList.contains('view-hidden');
+
+            tg.MainButton.show();
+            if (mainButtonCallback) tg.MainButton.offClick(mainButtonCallback);
+
+            if (isCheckout) {
+                tg.MainButton.setText(`Подтвердить заказ на ${total.toLocaleString()} ₽`);
+                mainButtonCallback = () => document.getElementById('checkoutForm').requestSubmit();
+            } else if (isCartOpen) {
+                tg.MainButton.setText('К оформлению');
+                mainButtonCallback = () => goToCheckout();
+            } else {
+                tg.MainButton.setText(`Корзина (${total.toLocaleString()} ₽)`);
+                mainButtonCallback = () => toggleCart();
+            }
+            tg.MainButton.onClick(mainButtonCallback);
+        }
+
+        // Навигация между экранами
+        function navigateTo(view) {
+            document.querySelectorAll('.view-main').forEach(v => v.classList.add('view-hidden'));
+            document.getElementById(`view-${view}`).classList.remove('view-hidden');
+            document.getElementById('searchContainer').style.opacity = (view === 'catalog' ? '1' : '0');
+            window.scrollTo(0, 0);
+            setupMainButton();
+        }
+
+        function initCategories() {
+            const container = document.getElementById('categoryFilters');
+            const categories = ['all', ...new Set(products.map(p => p.category))];
+            container.innerHTML = categories.map(cat => `
+                <button onclick="setCategory('${cat}')" 
+                        class="px-5 py-2.5 text-sm font-bold rounded-xl transition-all ${currentCategory === cat ? 'bg-white shadow-sm text-blue-600' : 'hover:text-blue-500'}">
+                    ${cat === 'all' ? 'Все' : cat}
+                </button>
+            `).join('');
+        }
+
+        function setCategory(cat) {
+            currentCategory = cat;
+            initCategories();
+            renderProducts();
+        }
+
+        function renderProducts() {
+            const grid = document.getElementById('productGrid');
+            const search = document.getElementById('searchInput').value.toLowerCase();
+            const sort = document.getElementById('sortSelect').value;
+
+            let filtered = products.filter(p => (currentCategory === 'all' || p.category === currentCategory) && p.name.toLowerCase().includes(search));
+
+            if (sort === 'cheap') filtered.sort((a, b) => a.price - b.price);
+            if (sort === 'expensive') filtered.sort((a, b) => b.price - a.price);
+
+            grid.innerHTML = filtered.map(p => `
+                <div class="product-card p-4 group">
+                    <div class="relative rounded-[28px] overflow-hidden mb-5 aspect-[4/5]">
+                        <img src="${p.img}" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700">
+                        <button onclick="addToCart(${p.id})" class="absolute bottom-4 right-4 bg-white/90 backdrop-blur shadow-xl text-blue-600 p-4 rounded-2xl opacity-0 group-hover:opacity-100 transform translate-y-2 group-hover:translate-y-0 transition-all duration-300">
+                            <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-width="2.5" d="M12 4v16m8-8H4" /></svg>
+                        </button>
+                    </div>
+                    <div class="px-2">
+                        <span class="text-[10px] font-black uppercase tracking-widest text-blue-500 mb-1 block">${p.category}</span>
+                        <h3 class="text-lg font-extrabold text-slate-800 leading-tight mb-2">${p.name}</h3>
+                        <span class="text-xl font-black text-slate-900">${p.price.toLocaleString()} ₽</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function addToCart(id) {
+            const item = cart.find(i => i.id === id);
+            if (item) item.quantity++;
+            else cart.push({...products.find(p => p.id === id), quantity: 1});
+            showToast("Добавлено в корзину");
+            saveAndRefresh();
+        }
+
+        function changeQuantity(id, delta) {
+            const item = cart.find(i => i.id === id);
+            if (item) {
+                item.quantity += delta;
+                if (item.quantity <= 0) cart = cart.filter(i => i.id !== id);
+                saveAndRefresh();
+            }
+        }
+
+        function saveAndRefresh() {
+            localStorage.setItem('cart_liquid_v2', JSON.stringify(cart));
+            updateCartUI();
+            setupMainButton();
+        }
+
+        function toggleCart() {
+            document.getElementById('cartDrawer').classList.toggle('open');
+            document.getElementById('cartOverlay').classList.toggle('hidden');
+            setupMainButton();
+        }
+
+        function updateCartUI() {
+            const list = document.getElementById('cartItems');
+            const total = cart.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+            
+            document.getElementById('cartCount').innerText = cart.reduce((acc, i) => acc + i.quantity, 0);
+            document.getElementById('cartCount').classList.toggle('hidden', cart.length === 0);
+            document.getElementById('cartTotal').innerText = `${total.toLocaleString()} ₽`;
+            document.getElementById('checkoutTotal').innerText = `${total.toLocaleString()} ₽`;
+
+            if (cart.length === 0) {
+                list.innerHTML = `<div class="h-full flex flex-col items-center justify-center opacity-30 text-center"><p class="font-bold">Пусто</p></div>`;
+            } else {
+                list.innerHTML = cart.map(i => `
+                    <div class="flex gap-4 items-center">
+                        <img src="${i.img}" class="w-20 h-20 rounded-2xl object-cover">
+                        <div class="flex-1">
+                            <h4 class="font-bold text-slate-800 text-sm leading-tight">${i.name}</h4>
+                            <p class="text-blue-600 font-black text-xs mt-1">${i.price.toLocaleString()} ₽</p>
+                            <div class="flex items-center gap-3 mt-3">
+                                <button onclick="changeQuantity(${i.id}, -1)" class="w-7 h-7 flex items-center justify-center bg-white rounded-lg shadow-sm font-bold text-lg">-</button>
+                                <span class="text-sm font-black">${i.quantity}</span>
+                                <button onclick="changeQuantity(${i.id}, 1)" class="w-7 h-7 flex items-center justify-center bg-white rounded-lg shadow-sm font-bold text-lg">+</button>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function goToCheckout() {
+            if (cart.length === 0) return showToast("Корзина пуста");
+            toggleCart();
+            navigateTo('checkout');
+        }
+
+        function handleOrderSubmit(e) {
+            e.preventDefault();
+            const total = document.getElementById('checkoutTotal').innerText;
+            const paymentMethod = document.querySelector('input[name="payment"]:checked').value;
+            const paymentText = paymentMethod === 'card' ? 'Картой онлайн' : 'Наличными при получении';
+            
+            const successMsg = `🎉 Заказ успешно оформлен!\nСумма: ${total}\nСпособ оплаты: ${paymentText}`;
+
+            if (tg.initDataUnsafe?.user) {
+                // Если открыто внутри Telegram, показываем нативный попап и закрываем приложение
+                tg.showAlert(successMsg, () => {
+                    cart = [];
+                    saveAndRefresh();
+                    tg.close();
+                });
+            } else {
+                // Фолбэк для обычного браузера
+                alert(`${successMsg}\nСпасибо за покупку в LiquidShop.`);
+                cart = [];
+                saveAndRefresh();
+                navigateTo('catalog');
+                e.target.reset();
+            }
+        }
+
+        function showToast(msg) {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = "toast px-6 py-4 text-white font-bold text-sm shadow-2xl";
+            toast.innerText = msg;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 500);
+            }, 2000);
+        }
+
+        document.getElementById('searchInput').addEventListener('input', renderProducts);
+        
+        window.onload = () => {
+            // Предзаполнение имени из данных Telegram
+            if (tg.initDataUnsafe?.user?.first_name) {
+                const userName = tg.initDataUnsafe.user.first_name + (tg.initDataUnsafe.user.last_name ? ' ' + tg.initDataUnsafe.user.last_name : '');
+                const nameInput = document.getElementById('nameInput');
+                if (nameInput) nameInput.value = userName;
+            }
+
+            initCategories();
+            renderProducts();
+            updateCartUI();
+            setupMainButton();
+        };
+    </script>
+</body>
+</html>
