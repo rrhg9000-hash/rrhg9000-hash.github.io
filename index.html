@@ -4,20 +4,45 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Liquid Glass Market</title>
-    <!-- Telegram SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <!-- Библиотеки -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
+        
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: linear-gradient(135deg, #e0e7ff 0%, #f3f4f6 50%, #dbeafe 100%);
+            background-attachment: fixed;
+            min-height: 100vh;
+        }
+
+        .liquid-glass {
+            background: rgba(255, 255, 255, 0.45);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            border: 1px solid rgba(255, 255, 255, 0.7);
+        }
+
+        .glass-card {
+            background: rgba(255, 255, 255, 0.55);
+            backdrop-filter: blur(14px);
+            border: 1px solid rgba(255, 255, 255, 0.8);
+            border-radius: 24px;
+        }
+
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .animate-fade { animation: fadeIn 0.4s ease-out forwards; }
+
+        @keyframes slideUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .animate-slide-up { animation: slideUp 0.4s ease-out forwards; }
     </style>
 </head>
-<body class="bg-slate-50 font-sans antialiased text-slate-900">
+<body class="text-slate-800">
     <div id="root"></div>
 
     <script type="module">
@@ -46,12 +71,8 @@
         const e = React.createElement;
 
         // Icons
-        const CartIcon = () => e('svg', { className: "w-6 h-6", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, 
-            e('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" }));
-        const SettingsIcon = () => e('svg', { className: "w-6 h-6", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, 
-            e('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" }));
-        const PlusIcon = () => e('svg', { className: "w-5 h-5", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, 
-            e('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "3", d: "M12 4v16m8-8H4" }));
+        const TrashIcon = () => e('svg', { className: "w-5 h-5", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, 
+            e('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" }));
 
         function App() {
             const [user, setUser] = useState(null);
@@ -64,17 +85,14 @@
             const [isCartOpen, setIsCartOpen] = useState(false);
             const [currentCat, setCurrentCat] = useState('all');
             const [search, setSearch] = useState('');
-            const [errorType, setErrorType] = useState(null); 
+            const [errorType, setErrorType] = useState(null);
 
             const tg = window.Telegram?.WebApp;
 
             useEffect(() => {
                 const init = async () => {
                     try {
-                        await signInAnonymously(auth).catch(err => {
-                            if (err.code === 'auth/configuration-not-found') setErrorType('auth');
-                        });
-
+                        await signInAnonymously(auth);
                         onAuthStateChanged(auth, (fUser) => {
                             setUser(fUser);
                             if (fUser) {
@@ -84,6 +102,7 @@
                             setLoading(false);
                         });
                     } catch (err) {
+                        setErrorType('auth');
                         setLoading(false);
                     }
                 };
@@ -92,26 +111,8 @@
 
             useEffect(() => {
                 if (!user) return;
-                
-                const unsubP = onSnapshot(
-                    collection(db, 'artifacts', APP_ID, 'public', 'data', 'products'), 
-                    (s) => setProducts(s.docs.map(d => ({ id: d.id, ...d.data() }))),
-                    (err) => {
-                        console.error("Firestore error:", err.code, err.message);
-                        if (err.code === 'permission-denied' || err.message.includes('Firestore API has not been used')) {
-                            setErrorType('firestore');
-                        }
-                    }
-                );
-                
-                const unsubC = onSnapshot(
-                    collection(db, 'artifacts', APP_ID, 'public', 'data', 'categories'), 
-                    (s) => setCategories(s.docs.map(d => ({ id: d.id, ...d.data() }))),
-                    (err) => {
-                        if (err.code === 'permission-denied') setErrorType('firestore');
-                    }
-                );
-                
+                const unsubP = onSnapshot(collection(db, 'artifacts', APP_ID, 'public', 'data', 'products'), (s) => setProducts(s.docs.map(d => ({ id: d.id, ...d.data() }))), (err) => err.code === 'permission-denied' && setErrorType('firestore'));
+                const unsubC = onSnapshot(collection(db, 'artifacts', APP_ID, 'public', 'data', 'categories'), (s) => setCategories(s.docs.map(d => ({ id: d.id, ...d.data() }))), (err) => err.code === 'permission-denied' && setErrorType('firestore'));
                 return () => { unsubP(); unsubC(); };
             }, [user]);
 
@@ -121,158 +122,187 @@
                     if (exists) return prev.map(i => i.id === p.id ? {...i, qty: i.qty + 1} : i);
                     return [...prev, {...p, qty: 1}];
                 });
-                if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+                tg?.HapticFeedback?.impactOccurred('light');
             };
 
             const total = useMemo(() => cart.reduce((s, i) => s + (Number(i.price) * i.qty), 0), [cart]);
-            const filtered = products.filter(p => 
-                (currentCat === 'all' || p.category === currentCat) &&
-                (p.name || "").toLowerCase().includes(search.toLowerCase())
-            );
+            const filtered = products.filter(p => (currentCat === 'all' || p.category === currentCat) && (p.name || "").toLowerCase().includes(search.toLowerCase()));
 
-            // UI for initialization errors
-            if (errorType) {
-                return e('div', { className: "min-h-screen bg-slate-900 text-white p-6 flex flex-col items-center justify-center" },
-                    e('div', { className: "w-20 h-20 bg-red-600 rounded-full flex items-center justify-center text-4xl mb-6 shadow-2xl animate-pulse" }, "🆘"),
-                    e('h1', { className: "text-2xl font-black mb-4 text-center" }, "Сервис Firebase не активирован"),
-                    
-                    e('div', { className: "bg-slate-800 p-6 rounded-3xl w-full max-w-md border border-slate-700 space-y-4 mb-6" },
-                        errorType === 'firestore' ? [
-                            e('p', { className: "text-red-400 font-bold" }, "Ошибка: Cloud Firestore API disabled"),
-                            e('p', { className: "text-sm text-slate-400" }, "Ваш проект Firebase создан, но база данных Firestore не активирована."),
-                            e('div', { className: "p-4 bg-slate-900 rounded-2xl border border-slate-700" },
-                                e('p', { className: "text-xs font-mono text-indigo-400 break-all mb-3" }, "https://console.firebase.google.com/project/iwtttlapr/firestore"),
-                                e('ol', { className: "text-sm text-slate-300 list-decimal pl-4 space-y-2" },
-                                    e('li', null, "Перейдите по ссылке выше"),
-                                    e('li', null, "Нажмите 'Create database'"),
-                                    e('li', null, "Выберите 'Start in test mode'"),
-                                    e('li', null, "Нажмите 'Enable'")
-                                )
+            const deleteItem = async (col, id) => {
+                if (confirm('Удалить этот элемент?')) {
+                    await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', col, id));
+                }
+            };
+
+            if (errorType === 'firestore') return e('div', { className: "p-10 text-center" }, "Пожалуйста, активируйте Firestore в консоли Firebase.");
+
+            if (loading) return e('div', { className: "h-screen flex items-center justify-center" }, e('div', { className: "w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" }));
+
+            return e('div', { className: "pb-24" },
+                // Header
+                e('header', { className: "sticky top-2 z-40 mx-2 mt-2" },
+                    e('div', { className: "liquid-glass rounded-[24px] px-4 py-3 flex justify-between items-center shadow-lg" },
+                        e('div', { className: "flex items-center gap-2 cursor-pointer", onClick: () => setView('catalog') },
+                            e('div', { className: "w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center text-white font-black shadow-blue-200 shadow-lg" }, "L"),
+                            e('span', { className: "font-extrabold text-xl bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-blue-500" }, "Market")
+                        ),
+                        e('div', { className: "flex gap-2" },
+                            isAdmin && e('button', { onClick: () => setView('admin'), className: `p-2.5 rounded-xl transition-all ${view === 'admin' ? 'bg-blue-600 text-white' : 'bg-white/50'}` }, 
+                                e('svg', { className: "w-5 h-5", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, e('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" }))
+                            ),
+                            e('button', { onClick: () => setIsCartOpen(true), className: "relative p-2.5 bg-slate-900 text-white rounded-xl shadow-lg active:scale-95 transition-transform" },
+                                e('svg', { className: "w-5 h-5", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, e('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" })),
+                                cart.length > 0 && e('span', { className: "absolute -top-1 -right-1 bg-blue-500 text-white text-[10px] w-5 h-5 rounded-full flex items-center justify-center font-bold border-2 border-slate-900" }, cart.reduce((a, b) => a + b.qty, 0))
                             )
-                        ] : [
-                            e('p', { className: "text-amber-400 font-bold" }, "Ошибка: Anonymous Auth disabled"),
-                            e('ol', { className: "text-sm text-slate-300 list-decimal pl-4 space-y-2" },
-                                e('li', null, "В консоли Firebase откройте Authentication"),
-                                e('li', null, "Sign-in method -> Add new provider"),
-                                e('li', null, "Выберите Anonymous и включите его")
-                            )
-                        ]
-                    ),
-                    e('button', { 
-                        onClick: () => window.location.reload(), 
-                        className: "w-full max-w-md bg-white text-slate-900 py-4 rounded-2xl font-black active:scale-95 transition-all shadow-xl" 
-                    }, "Я ВСЁ ВКЛЮЧИЛ, ОБНОВИТЬ")
-                );
-            }
-
-            if (loading) {
-                return e('div', { className: "h-screen flex items-center justify-center bg-white" },
-                    e('div', { className: "w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" })
-                );
-            }
-
-            return e('div', { className: "min-h-screen pb-20" },
-                e('header', { className: "sticky top-0 z-40 bg-white/80 backdrop-blur-xl border-b px-4 py-3 flex justify-between items-center" },
-                    e('div', { className: "flex items-center gap-2", onClick: () => setView('catalog') },
-                        e('div', { className: "w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black" }, "LG"),
-                        e('span', { className: "font-black text-lg uppercase tracking-tighter" }, "Market")
-                    ),
-                    e('div', { className: "flex gap-2" },
-                        isAdmin && e('button', { onClick: () => setView('admin'), className: `p-2.5 rounded-xl ${view === 'admin' ? 'bg-indigo-600 text-white' : 'bg-slate-100'}` }, e(SettingsIcon)),
-                        e('button', { onClick: () => setIsCartOpen(true), className: "relative p-2.5 bg-slate-900 text-white rounded-xl" },
-                            e(CartIcon),
-                            cart.length > 0 && e('span', { className: "absolute -top-1 -right-1 bg-red-500 text-white text-[10px] w-5 h-5 rounded-full flex items-center justify-center font-bold border-2 border-white" }, cart.reduce((a, b) => a + b.qty, 0))
                         )
                     )
                 ),
+
                 e('main', { className: "p-4 max-w-2xl mx-auto" },
                     view === 'catalog' ? e('div', { className: "space-y-6" },
-                        e('input', { className: "w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 ring-indigo-500/10 transition-all", placeholder: "Поиск деталей...", onChange: (e) => setSearch(e.target.value) }),
-                        e('div', { className: "flex gap-2 overflow-x-auto no-scrollbar py-1" },
-                            e('button', { onClick: () => setCurrentCat('all'), className: `px-6 py-2.5 rounded-xl font-bold text-sm whitespace-nowrap ${currentCat === 'all' ? 'bg-indigo-600 text-white' : 'bg-white border text-slate-500'}` }, "Все"),
-                            categories.map(c => e('button', { key: c.id, onClick: () => setCurrentCat(c.name), className: `px-6 py-2.5 rounded-xl font-bold text-sm whitespace-nowrap ${currentCat === c.name ? 'bg-indigo-600 text-white' : 'bg-white border text-slate-500'}` }, c.name))
+                        e('input', { className: "w-full p-4 bg-white/50 backdrop-blur-md border border-white/60 rounded-2xl outline-none focus:ring-4 ring-blue-500/10 transition-all", placeholder: "Поиск деталей...", onChange: (e) => setSearch(e.target.value) }),
+                        e('div', { className: "flex gap-2 overflow-x-auto no-scrollbar" },
+                            e('button', { onClick: () => setCurrentCat('all'), className: `px-5 py-2 rounded-xl font-bold text-sm whitespace-nowrap transition-all ${currentCat === 'all' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500'}` }, "Все"),
+                            categories.map(c => e('button', { key: c.id, onClick: () => setCurrentCat(c.name), className: `px-5 py-2 rounded-xl font-bold text-sm whitespace-nowrap transition-all ${currentCat === c.name ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500'}` }, c.name))
                         ),
                         e('div', { className: "grid grid-cols-2 gap-4" },
-                            filtered.map(p => e('div', { key: p.id, className: "bg-white rounded-[2rem] p-3 border border-slate-100 shadow-sm animate-fade flex flex-col" },
-                                e('img', { src: p.img, className: "aspect-square rounded-[1.5rem] object-cover mb-3 bg-slate-50" }),
-                                e('h3', { className: "font-bold text-sm leading-tight text-slate-800 line-clamp-2 mb-2 px-1" }, p.name),
-                                e('div', { className: "flex justify-between items-center mt-auto" },
-                                    e('span', { className: "font-black text-indigo-600 text-lg px-1" }, `${p.price} ₽`),
-                                    e('button', { onClick: () => addToCart(p), className: "bg-slate-900 text-white p-2.5 rounded-xl active:scale-90 transition-transform" }, e(PlusIcon))
+                            filtered.map(p => e('div', { key: p.id, className: "glass-card p-2 animate-slide-up flex flex-col" },
+                                e('div', { className: "relative rounded-[20px] overflow-hidden aspect-square mb-3" },
+                                    e('img', { src: p.img, className: "w-full h-full object-cover" }),
+                                    e('button', { onClick: () => addToCart(p), className: "absolute bottom-2 right-2 bg-blue-600 text-white p-2.5 rounded-xl shadow-lg active:scale-90 transition-transform" }, 
+                                        e('svg', { className: "w-4 h-4", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, e('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "3", d: "M12 4v16m8-8H4" }))
+                                    )
+                                ),
+                                e('div', { className: "px-1 flex-1 flex flex-col" },
+                                    e('span', { className: "text-[10px] font-black uppercase tracking-widest text-blue-500" }, p.category),
+                                    e('h3', { className: "font-bold text-[13px] leading-tight text-slate-800 line-clamp-2" }, p.name),
+                                    e('span', { className: "text-lg font-black text-slate-900 mt-2" }, `${p.price} ₽`)
                                 )
                             ))
-                        ),
-                        filtered.length === 0 && e('div', { className: "text-center py-20 text-slate-400 italic" }, "Ничего не найдено")
-                    ) : e('div', { className: "space-y-8 animate-fade pb-10" },
-                        e('h2', { className: "text-3xl font-black" }, "Управление"),
-                        e('form', { 
-                            onSubmit: async (evt) => {
-                                evt.preventDefault();
-                                await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'categories'), { name: evt.target.catname.value });
-                                evt.target.reset();
-                            },
-                            className: "bg-white p-6 rounded-[2rem] border shadow-sm flex gap-2" 
-                        },
-                            e('input', { name: "catname", placeholder: "Новая категория", required: true, className: "flex-1 p-4 bg-slate-50 rounded-2xl outline-none" }),
-                            e('button', { className: "bg-indigo-600 text-white px-6 rounded-2xl font-bold" }, "+")
-                        ),
-                        e('form', {
-                            onSubmit: async (evt) => {
-                                evt.preventDefault();
-                                const f = evt.target;
-                                await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'products'), {
-                                    name: f.pname.value,
-                                    price: Number(f.pprice.value),
-                                    img: f.pimg.value,
-                                    category: f.pcat.value,
-                                    createdAt: Date.now()
-                                });
-                                f.reset();
-                            },
-                            className: "bg-white p-6 rounded-[2rem] border shadow-sm space-y-4"
-                        },
-                            e('input', { name: "pname", placeholder: "Название товара", required: true, className: "w-full p-4 bg-slate-50 rounded-2xl outline-none" }),
-                            e('div', { className: "flex gap-4" },
-                                e('input', { name: "pprice", type: "number", placeholder: "Цена", required: true, className: "flex-1 p-4 bg-slate-50 rounded-2xl outline-none" }),
-                                e('select', { name: "pcat", className: "flex-1 p-4 bg-slate-50 rounded-2xl outline-none" },
-                                    categories.map(c => e('option', { key: c.id, value: c.name }, c.name))
-                                )
+                        )
+                    ) : e('div', { className: "space-y-6 animate-slide-up" },
+                        e('h2', { className: "text-2xl font-black" }, "Панель управления"),
+                        
+                        // Categories Admin
+                        e('div', { className: "glass-card p-6 space-y-4" },
+                            e('h3', { className: "font-bold" }, "Категории"),
+                            e('div', { className: "flex flex-wrap gap-2" },
+                                categories.map(c => e('div', { key: c.id, className: "bg-white/60 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 border border-white" }, 
+                                    c.name,
+                                    e('button', { onClick: () => deleteItem('categories', c.id), className: "text-red-500" }, "×")
+                                ))
                             ),
-                            e('input', { name: "pimg", placeholder: "URL картинки", required: true, className: "w-full p-4 bg-slate-50 rounded-2xl outline-none" }),
-                            e('button', { className: "w-full bg-slate-900 text-white py-5 rounded-[1.5rem] font-black text-lg shadow-xl" }, "Добавить товар")
+                            e('form', { 
+                                onSubmit: async (evt) => {
+                                    evt.preventDefault();
+                                    await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'categories'), { name: evt.target.catname.value });
+                                    evt.target.reset();
+                                },
+                                className: "flex gap-2" 
+                            },
+                                e('input', { name: "catname", placeholder: "Новая категория", required: true, className: "flex-1 p-3 bg-white/40 border border-white/60 rounded-xl outline-none" }),
+                                e('button', { className: "bg-blue-600 text-white px-5 rounded-xl font-bold" }, "+")
+                            )
+                        ),
+
+                        // Products Admin
+                        e('div', { className: "glass-card p-6 space-y-4" },
+                            e('h3', { className: "font-bold" }, "Добавить товар"),
+                            e('form', {
+                                onSubmit: async (evt) => {
+                                    evt.preventDefault();
+                                    const f = evt.target;
+                                    await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'products'), {
+                                        name: f.pname.value,
+                                        price: Number(f.pprice.value),
+                                        img: f.pimg.value,
+                                        category: f.pcat.value,
+                                        createdAt: Date.now()
+                                    });
+                                    f.reset();
+                                },
+                                className: "space-y-3"
+                            },
+                                e('input', { name: "pname", placeholder: "Название", required: true, className: "w-full p-3 bg-white/40 border border-white/60 rounded-xl outline-none" }),
+                                e('div', { className: "flex gap-3" },
+                                    e('input', { name: "pprice", type: "number", placeholder: "Цена", required: true, className: "flex-1 p-3 bg-white/40 border border-white/60 rounded-xl outline-none" }),
+                                    e('select', { name: "pcat", className: "flex-1 p-3 bg-white/40 border border-white/60 rounded-xl outline-none" },
+                                        categories.map(c => e('option', { key: c.id, value: c.name }, c.name))
+                                    )
+                                ),
+                                e('input', { name: "pimg", placeholder: "URL картинки", required: true, className: "w-full p-3 bg-white/40 border border-white/60 rounded-xl outline-none" }),
+                                e('button', { className: "w-full bg-slate-900 text-white py-4 rounded-xl font-black" }, "Сохранить")
+                            )
+                        ),
+
+                        // Product List Admin
+                        e('div', { className: "space-y-3" },
+                            products.map(p => e('div', { key: p.id, className: "glass-card p-3 flex items-center justify-between" },
+                                e('div', { className: "flex items-center gap-3" },
+                                    e('img', { src: p.img, className: "w-10 h-10 rounded-lg object-cover" }),
+                                    e('div', null,
+                                        e('p', { className: "text-xs font-bold leading-none" }, p.name),
+                                        e('p', { className: "text-[10px] text-slate-500" }, `${p.price} ₽`)
+                                    )
+                                ),
+                                e('button', { onClick: () => deleteItem('products', p.id), className: "text-red-400 p-2" }, e(TrashIcon))
+                            ))
                         )
                     )
                 ),
+
+                // Cart Drawer
                 isCartOpen && e('div', { className: "fixed inset-0 z-50 flex items-end justify-center" },
-                    e('div', { className: "absolute inset-0 bg-slate-900/40 backdrop-blur-md", onClick: () => setIsCartOpen(false) }),
-                    e('div', { className: "relative bg-white w-full max-w-2xl rounded-t-[3rem] p-8 max-h-[90vh] flex flex-col animate-fade" },
-                        e('div', { className: "w-16 h-1.5 bg-slate-100 rounded-full mx-auto mb-8", onClick: () => setIsCartOpen(false) }),
-                        e('h2', { className: "text-3xl font-black mb-8" }, "Корзина"),
-                        e('div', { className: "flex-1 overflow-y-auto space-y-4 no-scrollbar" },
-                            cart.map(item => e('div', { key: item.id, className: "flex gap-4 items-center bg-slate-50 p-4 rounded-3xl" },
-                                e('img', { src: item.img, className: "w-16 h-16 rounded-2xl object-cover" }),
+                    e('div', { className: "absolute inset-0 bg-slate-900/20 backdrop-blur-md", onClick: () => setIsCartOpen(false) }),
+                    e('div', { className: "relative bg-white/80 backdrop-blur-2xl w-full max-w-2xl rounded-t-[40px] p-6 max-h-[90vh] flex flex-col shadow-2xl animate-slide-up" },
+                        e('div', { className: "w-12 h-1 bg-slate-200 rounded-full mx-auto mb-6", onClick: () => setIsCartOpen(false) }),
+                        e('h2', { className: "text-2xl font-black mb-6" }, "Корзина"),
+                        
+                        e('div', { className: "flex-1 overflow-y-auto space-y-3 no-scrollbar" },
+                            cart.map(item => e('div', { key: item.id, className: "flex gap-4 items-center bg-white/40 p-3 rounded-2xl border border-white" },
+                                e('img', { src: item.img, className: "w-14 h-14 rounded-xl object-cover" }),
                                 e('div', { className: "flex-1" },
-                                    e('div', { className: "font-bold text-sm text-slate-800 leading-tight" }, item.name),
-                                    e('div', { className: "text-indigo-600 font-black" }, `${item.price} ₽`)
+                                    e('div', { className: "font-bold text-xs text-slate-800" }, item.name),
+                                    e('div', { className: "text-blue-600 font-black text-sm" }, `${item.price} ₽`)
                                 ),
-                                e('div', { className: "flex items-center gap-3 bg-white px-3 py-1 rounded-xl" },
-                                    e('button', { onClick: () => setCart(cart.map(i => i.id === item.id ? {...i, qty: Math.max(0, i.qty - 1)} : i).filter(i => i.qty > 0)), className: "text-slate-300 font-bold p-1" }, "−"),
-                                    e('span', { className: "font-black text-sm" }, item.qty),
-                                    e('button', { onClick: () => setCart(cart.map(i => i.id === item.id ? {...i, qty: i.qty + 1} : i)), className: "text-indigo-600 font-bold p-1" }, "+")
+                                e('div', { className: "flex items-center gap-3 bg-white/60 px-3 py-1 rounded-xl border border-white" },
+                                    e('button', { onClick: () => setCart(cart.map(i => i.id === item.id ? {...i, qty: Math.max(0, i.qty - 1)} : i).filter(i => i.qty > 0)), className: "text-slate-400 font-bold" }, "−"),
+                                    e('span', { className: "font-black text-xs" }, item.qty),
+                                    e('button', { onClick: () => setCart(cart.map(i => i.id === item.id ? {...i, qty: i.qty + 1} : i)), className: "text-blue-600 font-bold" }, "+")
                                 )
                             )),
-                            cart.length === 0 && e('div', { className: "text-center py-10 text-slate-400 italic" }, "Ваша корзина пока пуста")
+                            cart.length === 0 && e('div', { className: "text-center py-10 text-slate-400 italic" }, "Пусто")
                         ),
-                        e('div', { className: "mt-8 pt-8 border-t space-y-6" },
-                            e('div', { className: "flex justify-between items-end" },
-                                e('span', { className: "text-slate-400 font-bold text-xs uppercase tracking-widest" }, "Итого"),
-                                e('span', { className: "text-4xl font-black text-slate-900" }, `${total} ₽`)
+
+                        cart.length > 0 && e('form', { 
+                            onSubmit: (evt) => {
+                                evt.preventDefault();
+                                const d = new FormData(evt.target);
+                                const orderInfo = `Заказ: ${total}₽\nКлиент: ${d.get('fn')} ${d.get('ln')}\nТел: ${d.get('tel')}\nОплата: ${d.get('pay')}`;
+                                tg?.showAlert(orderInfo);
+                                setCart([]);
+                                setIsCartOpen(false);
+                            },
+                            className: "mt-6 space-y-4 pt-6 border-t border-white/50" 
+                        },
+                            e('div', { className: "grid grid-cols-2 gap-3" },
+                                e('input', { name: "fn", placeholder: "Имя", required: true, className: "p-3 bg-white/40 border border-white/60 rounded-xl outline-none text-sm" }),
+                                e('input', { name: "ln", placeholder: "Фамилия", required: true, className: "p-3 bg-white/40 border border-white/60 rounded-xl outline-none text-sm" })
                             ),
-                            e('button', { 
-                                onClick: () => { tg?.showAlert(`Заказ на ${total}₽ принят!`); setCart([]); setIsCartOpen(false); }, 
-                                disabled: cart.length === 0,
-                                className: "w-full bg-indigo-600 text-white py-5 rounded-[2rem] font-black text-xl active:scale-95 disabled:opacity-50 transition-all shadow-xl shadow-indigo-200" 
-                            }, "Оформить заказ")
+                            e('input', { name: "tel", type: "tel", placeholder: "Номер телефона", required: true, className: "w-full p-3 bg-white/40 border border-white/60 rounded-xl outline-none text-sm" }),
+                            e('div', { className: "flex gap-3" },
+                                e('label', { className: "flex-1 flex items-center gap-2 bg-white/40 p-3 rounded-xl border border-white cursor-pointer" }, 
+                                    e('input', { type: "radio", name: "pay", value: "Наличными", defaultChecked: true, className: "accent-blue-600" }), e('span', { className: "text-xs font-bold" }, "Наличными")
+                                ),
+                                e('label', { className: "flex-1 flex items-center gap-2 bg-white/40 p-3 rounded-xl border border-white cursor-pointer" }, 
+                                    e('input', { type: "radio", name: "pay", value: "Переводом", className: "accent-blue-600" }), e('span', { className: "text-xs font-bold" }, "Переводом")
+                                )
+                            ),
+                            e('div', { className: "flex justify-between items-center py-2" },
+                                e('span', { className: "text-slate-400 font-bold text-[10px] uppercase" }, "Итого"),
+                                e('span', { className: "text-2xl font-black" }, `${total} ₽`)
+                            ),
+                            e('button', { className: "w-full bg-blue-600 text-white py-4 rounded-2xl font-black text-lg shadow-xl shadow-blue-200" }, "Оформить")
                         )
                     )
                 )
