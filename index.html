@@ -1,461 +1,320 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>SimpleShop Liquid Glass</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
-        
-        :root {
-            --glass-bg: rgba(255, 255, 255, 0.45);
-            --glass-border: rgba(255, 255, 255, 0.7);
-            --liquid-blue: #3b82f6;
+import React, { useState, useEffect, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  doc, 
+  setDoc, 
+  getDocs, 
+  onSnapshot, 
+  deleteDoc,
+  query,
+  addDoc
+} from 'firebase/firestore';
+
+// Конфигурация Firebase берется из окружения
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'liquid-glass-shop';
+
+// ВАЖНО: Впишите сюда свой Telegram ID. 
+// Его можно узнать в ботах типа @userinfobot или через консоль приложения.
+const ADMIN_TELEGRAM_ID = 7744774197; // Замените на ваш реальный ID
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [tgUser, setTgUser] = useState(null);
+  const [view, setView] = useState('catalog');
+  const [products, setProducts] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [cart, setCart] = useState([]);
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  const [currentCat, setCurrentCat] = useState('all');
+  const [search, setSearch] = useState('');
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  const tg = window.Telegram?.WebApp;
+
+  // 1. Инициализация Auth
+  useEffect(() => {
+    const initAuth = async () => {
+      await signInAnonymously(auth);
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      if (tg?.initDataUnsafe?.user) {
+        const telegramUser = tg.initDataUnsafe.user;
+        setTgUser(telegramUser);
+        // Проверка прав админа по ID
+        if (Number(telegramUser.id) === ADMIN_TELEGRAM_ID) {
+          setIsAdmin(true);
         }
+      } else {
+        // Для тестов в браузере (можно временно включить тру)
+        // setIsAdmin(true); 
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
-        body {
-            font-family: 'Plus Jakarta Sans', sans-serif;
-            background: linear-gradient(135deg, #e0e7ff 0%, #f3f4f6 50%, #dbeafe 100%);
-            background-attachment: fixed;
-            min-height: 100vh;
-            -webkit-tap-highlight-color: transparent;
-        }
+  // 2. Подписка на данные (Firestore)
+  useEffect(() => {
+    if (!user) return;
 
-        /* Анимированный фон */
-        .bg-blob {
-            position: fixed;
-            width: 600px;
-            height: 600px;
-            background: radial-gradient(circle, rgba(59, 130, 246, 0.12) 0%, rgba(59, 130, 246, 0) 70%);
-            filter: blur(100px);
-            z-index: -1;
-            animation: move 25s infinite alternate;
-        }
+    const productsRef = collection(db, 'artifacts', appId, 'public', 'data', 'products');
+    const categoriesRef = collection(db, 'artifacts', appId, 'public', 'data', 'categories');
 
-        @keyframes move {
-            from { transform: translate(-20%, -20%); }
-            to { transform: translate(30%, 30%); }
-        }
+    const unsubProducts = onSnapshot(productsRef, (snapshot) => {
+      const pData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setProducts(pData);
+    }, (err) => console.error("Products fetch error:", err));
 
-        .liquid-glass {
-            background: var(--glass-bg);
-            backdrop-filter: blur(20px) saturate(180%);
-            -webkit-backdrop-filter: blur(20px) saturate(180%);
-            border: 1px solid var(--glass-border);
-            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.05);
-        }
+    const unsubCategories = onSnapshot(categoriesRef, (snapshot) => {
+      const cData = snapshot.docs.map(doc => doc.data().name);
+      setCategories(cData.length ? cData : ["Гаджеты", "Аудио", "Свет"]);
+    }, (err) => console.error("Categories fetch error:", err));
 
-        .product-card, .checkout-card {
-            background: rgba(255, 255, 255, 0.55);
-            backdrop-filter: blur(14px);
-            border: 1px solid rgba(255, 255, 255, 0.8);
-            border-radius: 24px;
-            transition: all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
-        }
+    return () => { unsubProducts(); unsubCategories(); };
+  }, [user]);
 
-        .cart-drawer {
-            transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
-            transform: translateX(110%);
-            background: rgba(255, 255, 255, 0.75);
-            backdrop-filter: blur(40px) saturate(200%);
-        }
+  // Логика корзины
+  const total = useMemo(() => cart.reduce((sum, item) => sum + (item.price * item.quantity), 0), [cart]);
+  
+  const addToCart = (p) => {
+    const existing = cart.find(i => i.id === p.id);
+    if (existing) {
+      setCart(cart.map(i => i.id === p.id ? { ...i, quantity: i.quantity + 1 } : i));
+    } else {
+      setCart([...cart, { ...p, quantity: 1 }]);
+    }
+    tg?.HapticFeedback?.notificationOccurred('success');
+  };
 
-        .cart-drawer.open {
-            transform: translateX(0);
-        }
+  const changeQty = (id, delta) => {
+    const newCart = cart.map(i => i.id === id ? { ...i, quantity: i.quantity + delta } : i)
+                        .filter(i => i.quantity > 0);
+    setCart(newCart);
+  };
 
-        .input-glass {
-            background: rgba(255, 255, 255, 0.4);
-            border: 1px solid rgba(255, 255, 255, 0.6);
-            backdrop-filter: blur(5px);
-            transition: all 0.3s ease;
-        }
+  const handleOrder = () => {
+    tg.showAlert(`Заказ на сумму ${total} ₽ успешно оформлен!`);
+    setCart([]);
+    setView('catalog');
+  };
 
-        .input-glass:focus {
-            background: rgba(255, 255, 255, 0.8);
-            border-color: #3b82f6;
-            outline: none;
-        }
+  // Админ-функции
+  const addProduct = async (e) => {
+    e.preventDefault();
+    if (!isAdmin) return;
+    const form = e.target;
+    const newP = {
+      name: form.name.value,
+      price: Number(form.price.value),
+      img: form.img.value,
+      category: form.category.value
+    };
+    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), newP);
+    form.reset();
+  };
 
-        .toast {
-            background: rgba(15, 23, 42, 0.9);
-            backdrop-filter: blur(12px);
-            border-radius: 24px;
-            animation: slideInUp 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-        }
+  const deleteProduct = async (id) => {
+    if (!isAdmin) return;
+    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', id));
+  };
 
-        @keyframes slideInUp {
-            from { transform: translateY(100%) scale(0.9); opacity: 0; }
-            to { transform: translateY(0) scale(1); opacity: 1; }
-        }
+  const addCategory = async (name) => {
+    if (!isAdmin || !name) return;
+    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'categories'), { name });
+  };
 
-        .view-hidden { display: none; }
-        
-        /* Фикс для нативной кнопки: убираем нижний отступ, если мы в ТГ */
-        .safe-area-bottom {
-            padding-bottom: env(safe-area-inset-bottom);
-        }
-    </style>
-</head>
-<body class="text-slate-800 safe-area-bottom">
+  const filteredProducts = products.filter(p => 
+    (currentCat === 'all' || p.category === currentCat) && 
+    p.name.toLowerCase().includes(search.toLowerCase())
+  );
 
-    <div class="bg-blob"></div>
-
-    <!-- Уведомления -->
-    <div id="toastContainer" class="fixed bottom-8 right-8 z-[100] flex flex-col gap-3"></div>
-
-    <!-- Навигация -->
-    <nav class="sticky top-2 z-40 px-2 mt-2">
-        <div class="max-w-7xl mx-auto liquid-glass rounded-[24px] px-4 py-3 flex justify-between items-center">
-            <div class="flex items-center gap-2 cursor-pointer" onclick="navigateTo('catalog')">
-                <div class="w-8 h-8 bg-blue-600 flex items-center justify-center rounded-xl shadow-lg">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M16 11V7a4 4 0 11-8 0m-4 8v2a2 2 0 012 2h10a2 2 0 012-2v-5a2 2 0 01-2-2H5a2 2 0 01-2 2z" />
-                    </svg>
-                </div>
-                <h1 class="text-xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-blue-500">Liquid</h1>
-            </div>
-            
-            <div id="searchContainer" class="flex-1 max-w-xs mx-4 hidden sm:block">
-                <input type="text" id="searchInput" placeholder="Поиск..." 
-                       class="w-full px-4 py-2 bg-white/40 border-none rounded-xl text-sm focus:ring-2 focus:ring-blue-100 transition-all backdrop-blur-sm">
-            </div>
-
-            <button onclick="toggleCart()" class="relative p-2 bg-white/50 hover:bg-white rounded-xl transition-all shadow-sm">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
-                </svg>
-                <span id="cartCount" class="absolute -top-1 -right-1 bg-blue-600 text-white text-[10px] font-black min-w-[18px] h-[18px] flex items-center justify-center rounded-full border-2 border-white hidden">0</span>
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-20">
+      {/* Навигация */}
+      <nav className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b px-4 py-3 flex justify-between items-center">
+        <div className="flex items-center gap-2" onClick={() => setView('catalog')}>
+          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">L</div>
+          <span className="font-extrabold text-xl tracking-tight">Liquid</span>
+        </div>
+        <div className="flex items-center gap-3">
+          {isAdmin && (
+            <button onClick={() => setView('admin')} className="p-2 bg-slate-100 rounded-full">
+              <SettingsIcon />
             </button>
+          )}
+          <button onClick={() => setIsCartOpen(true)} className="relative p-2 bg-slate-100 rounded-full">
+            <CartIcon />
+            {cart.length > 0 && (
+              <span className="absolute -top-1 -right-1 bg-blue-600 text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">
+                {cart.reduce((a, b) => a + b.quantity, 0)}
+              </span>
+            )}
+          </button>
         </div>
-    </nav>
+      </nav>
 
-    <!-- Представление: Каталог -->
-    <div id="view-catalog" class="view-main max-w-7xl mx-auto px-4 py-6">
-        <div class="flex items-center justify-between mb-6 gap-2">
-            <div id="categoryFilters" class="flex overflow-x-auto no-scrollbar gap-2 p-1"></div>
-        </div>
-        <!-- Список в 2 колонны на мобильных (grid-cols-2) -->
-        <div id="productGrid" class="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-8"></div>
-    </div>
-
-    <!-- Представление: Оформление заказа -->
-    <div id="view-checkout" class="view-main max-w-3xl mx-auto px-4 py-6 view-hidden">
-        <button onclick="navigateTo('catalog')" class="flex items-center gap-2 text-slate-500 font-bold mb-6 hover:text-blue-600 transition-colors text-sm">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" /></svg>
-            Назад к покупкам
-        </button>
-
-        <div class="checkout-card p-6 md:p-10 shadow-xl">
-            <h2 class="text-2xl font-black mb-6 tracking-tight">Данные заказа</h2>
-            
-            <form id="checkoutForm" onsubmit="handleOrderSubmit(event)" class="space-y-6">
-                <div class="space-y-4">
-                    <div class="space-y-1">
-                        <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Имя</label>
-                        <input type="text" id="nameInput" required class="input-glass w-full px-4 py-3 rounded-xl font-semibold text-sm" placeholder="Имя получателя">
-                    </div>
-                    <div class="space-y-1">
-                        <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Телефон</label>
-                        <input type="tel" required class="input-glass w-full px-4 py-3 rounded-xl font-semibold text-sm" placeholder="+7 (___) ___-__-__">
-                    </div>
-                    <div class="space-y-1">
-                        <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Адрес</label>
-                        <input type="text" required class="input-glass w-full px-4 py-3 rounded-xl font-semibold text-sm" placeholder="Город, улица, дом">
-                    </div>
-                </div>
-
-                <div class="space-y-3 pt-4">
-                    <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Оплата</label>
-                    <div class="grid grid-cols-2 gap-3">
-                        <label class="cursor-pointer relative">
-                            <input type="radio" name="payment" value="card" class="peer sr-only" checked>
-                            <div class="input-glass p-3 rounded-xl flex flex-col items-center gap-1 border-2 border-transparent peer-checked:border-blue-500 peer-checked:bg-white/80 transition-all text-center">
-                                <span class="font-bold text-xs text-slate-700">Картой</span>
-                            </div>
-                        </label>
-                        <label class="cursor-pointer relative">
-                            <input type="radio" name="payment" value="cash" class="peer sr-only">
-                            <div class="input-glass p-3 rounded-xl flex flex-col items-center gap-1 border-2 border-transparent peer-checked:border-blue-500 peer-checked:bg-white/80 transition-all text-center">
-                                <span class="font-bold text-xs text-slate-700">Наличные</span>
-                            </div>
-                        </label>
-                    </div>
-                </div>
-
-                <div class="pt-6 border-t border-white/50">
-                    <div class="flex justify-between items-center">
-                        <span class="text-slate-500 font-bold text-sm">Итого:</span>
-                        <span id="checkoutTotal" class="text-2xl font-black">0 ₽</span>
-                    </div>
-                    <!-- Кнопка "Подтвердить" в HTML скрыта, если есть MainButton в Telegram -->
-                    <button id="fallbackConfirmBtn" type="submit" class="btn-liquid w-full text-white py-4 rounded-xl font-black text-lg mt-6 sm:block hidden">
-                        Оформить заказ
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <!-- Сайдбар корзины -->
-    <div id="cartOverlay" onclick="toggleCart()" class="fixed inset-0 bg-slate-900/10 backdrop-blur-sm z-[50] hidden"></div>
-    <div id="cartDrawer" class="cart-drawer fixed right-0 top-0 h-full w-full max-w-md z-[60] flex flex-col border-l border-white/50">
-        <div class="p-6 border-b border-white/50 flex justify-between items-center">
-            <h2 class="text-2xl font-black">Корзина</h2>
-            <button onclick="toggleCart()" class="p-2 hover:bg-white/50 rounded-xl transition-all">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12" /></svg>
-            </button>
-        </div>
-        <div id="cartItems" class="flex-1 overflow-y-auto p-6 space-y-4"></div>
-        <div class="p-6 border-t border-white/50 space-y-4">
-            <div class="flex justify-between items-center">
-                <span class="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Сумма</span>
-                <span id="cartTotal" class="text-2xl font-black">0 ₽</span>
-            </div>
-            <!-- Кнопка "Оформить" в HTML скрыта, если есть MainButton в Telegram -->
-            <button id="fallbackCheckoutBtn" onclick="goToCheckout()" class="btn-liquid w-full text-white py-4 rounded-xl font-black text-lg sm:block hidden">
-                К оформлению
-            </button>
-        </div>
-    </div>
-
-    <script>
-        const tg = window.Telegram.WebApp;
-        tg.expand();
-        tg.enableClosingConfirmation();
-
-        // Скрываем стандартные кнопки, если мы в Telegram (будем использовать нативную MainButton)
-        const isTelegram = tg.initData !== "";
-        if (isTelegram) {
-            document.body.classList.add('is-tg');
-            // Будем управлять видимостью кнопок программно
-        }
-
-        const products = [
-            { id: 1, name: "Смартфон Pro Max", price: 89000, category: "Гаджеты", img: "https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?auto=format&fit=crop&w=600&q=80" },
-            { id: 2, name: "Наушники Studio", price: 12500, category: "Аудио", img: "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=600&q=80" },
-            { id: 3, name: "Лампа Minimalist", price: 4200, category: "Свет", img: "https://images.unsplash.com/photo-1507473885765-e6ed057f782c?auto=format&fit=crop&w=600&q=80" },
-            { id: 4, name: "Клавиатура Neon", price: 18000, category: "Гаджеты", img: "https://images.unsplash.com/photo-1511467687858-23d96c32e4ae?auto=format&fit=crop&w=600&q=80" },
-            { id: 5, name: "Камера X-100", price: 65900, category: "Фото", img: "https://images.unsplash.com/photo-1516035069371-29a1b244cc32?auto=format&fit=crop&w=600&q=80" },
-            { id: 6, name: "Часы Horizon", price: 25400, category: "Аксессуары", img: "https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=600&q=80" },
-            { id: 7, name: "Рюкзак Urban", price: 7800, category: "Аксессуары", img: "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?auto=format&fit=crop&w=600&q=80" },
-            { id: 8, name: "Мышь Ergo", price: 3900, category: "Гаджеты", img: "https://images.unsplash.com/photo-1527864550417-7fd91fc51a46?auto=format&fit=crop&w=600&q=80" }
-        ];
-
-        let cart = JSON.parse(localStorage.getItem('cart_liquid_v2')) || [];
-        let currentCategory = 'all';
-        let mainButtonCallback = null;
-
-        function setupMainButton() {
-            if (!isTelegram) {
-                // В обычном браузере показываем фолбэк кнопки
-                const isCartOpen = document.getElementById('cartDrawer').classList.contains('open');
-                const isCheckout = !document.getElementById('view-checkout').classList.contains('view-hidden');
-                document.getElementById('fallbackCheckoutBtn').style.display = (isCartOpen && cart.length > 0) ? 'block' : 'none';
-                document.getElementById('fallbackConfirmBtn').style.display = isCheckout ? 'block' : 'none';
-                return;
-            }
-
-            if (cart.length === 0) {
-                tg.MainButton.hide();
-                return;
-            }
-
-            const total = cart.reduce((acc, i) => acc + (i.price * i.quantity), 0);
-            const isCartOpen = document.getElementById('cartDrawer').classList.contains('open');
-            const isCheckout = !document.getElementById('view-checkout').classList.contains('view-hidden');
-
-            tg.MainButton.show();
-            if (mainButtonCallback) tg.MainButton.offClick(mainButtonCallback);
-
-            if (isCheckout) {
-                tg.MainButton.setText(`ОПЛАТИТЬ ${total.toLocaleString()} ₽`);
-                mainButtonCallback = () => document.getElementById('checkoutForm').requestSubmit();
-            } else if (isCartOpen) {
-                tg.MainButton.setText('ПЕРЕЙТИ К ОФОРМЛЕНИЮ');
-                mainButtonCallback = () => goToCheckout();
-            } else {
-                tg.MainButton.setText(`КОРЗИНА: ${total.toLocaleString()} ₽`);
-                mainButtonCallback = () => toggleCart();
-            }
-            tg.MainButton.onClick(mainButtonCallback);
-        }
-
-        function navigateTo(view) {
-            document.querySelectorAll('.view-main').forEach(v => v.classList.add('view-hidden'));
-            document.getElementById(`view-${view}`).classList.remove('view-hidden');
-            document.getElementById('searchContainer').style.opacity = (view === 'catalog' ? '1' : '0');
-            window.scrollTo(0, 0);
-            
-            // Если уходим с оформления, закрываем корзину тоже на всякий случай
-            if (view === 'catalog') {
-                 document.getElementById('cartDrawer').classList.remove('open');
-                 document.getElementById('cartOverlay').classList.add('hidden');
-            }
-            
-            setupMainButton();
-        }
-
-        function initCategories() {
-            const container = document.getElementById('categoryFilters');
-            const categories = ['all', ...new Set(products.map(p => p.category))];
-            container.innerHTML = categories.map(cat => `
-                <button onclick="setCategory('${cat}')" 
-                        class="whitespace-nowrap px-4 py-2 text-xs font-bold rounded-xl transition-all ${currentCategory === cat ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500 hover:text-blue-500'}">
-                    ${cat === 'all' ? 'Все товары' : cat}
+      {/* Контент */}
+      <div className="max-w-2xl mx-auto px-4 py-6">
+        {view === 'catalog' && (
+          <>
+            <input 
+              type="text" 
+              placeholder="Поиск..." 
+              className="w-full p-3 bg-white border rounded-2xl mb-6 outline-none focus:ring-2 ring-blue-500/20"
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <div className="flex gap-2 overflow-x-auto pb-4 no-scrollbar">
+              <button 
+                onClick={() => setCurrentCat('all')}
+                className={`px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap ${currentCat === 'all' ? 'bg-blue-600 text-white' : 'bg-white border text-slate-500'}`}
+              >
+                Все
+              </button>
+              {categories.map(c => (
+                <button 
+                  key={c}
+                  onClick={() => setCurrentCat(c)}
+                  className={`px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap ${currentCat === c ? 'bg-blue-600 text-white' : 'bg-white border text-slate-500'}`}
+                >
+                  {c}
                 </button>
-            `).join('');
-        }
-
-        function setCategory(cat) {
-            currentCategory = cat;
-            initCategories();
-            renderProducts();
-        }
-
-        function renderProducts() {
-            const grid = document.getElementById('productGrid');
-            const search = document.getElementById('searchInput').value.toLowerCase();
-            
-            let filtered = products.filter(p => (currentCategory === 'all' || p.category === currentCategory) && p.name.toLowerCase().includes(search));
-
-            grid.innerHTML = filtered.map(p => `
-                <div class="product-card p-2 sm:p-4 group flex flex-col h-full">
-                    <div class="relative rounded-[18px] sm:rounded-[28px] overflow-hidden mb-3 aspect-[1/1] sm:aspect-[4/5]">
-                        <img src="${p.img}" class="w-full h-full object-cover">
-                        <button onclick="addToCart(${p.id})" class="absolute bottom-2 right-2 sm:bottom-4 sm:right-4 bg-blue-600 text-white p-2 sm:p-4 rounded-xl shadow-lg active:scale-90 transition-transform">
-                            <svg class="h-4 w-4 sm:h-5 sm:w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-width="3" d="M12 4v16m8-8H4" /></svg>
-                        </button>
-                    </div>
-                    <div class="px-1 flex-1 flex flex-col justify-between">
-                        <div>
-                            <span class="text-[8px] sm:text-[10px] font-black uppercase tracking-widest text-blue-500 mb-1 block">${p.category}</span>
-                            <h3 class="text-xs sm:text-sm font-extrabold text-slate-800 leading-tight mb-1 line-clamp-2">${p.name}</h3>
-                        </div>
-                        <span class="text-sm sm:text-lg font-black text-slate-900 mt-1">${p.price.toLocaleString()} ₽</span>
-                    </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              {filteredProducts.map(p => (
+                <div key={p.id} className="bg-white rounded-3xl p-3 border border-slate-100 shadow-sm flex flex-col">
+                  <img src={p.img} className="w-full aspect-square object-cover rounded-2xl mb-3" alt={p.name} />
+                  <div className="flex-1">
+                    <p className="text-[10px] uppercase font-bold text-blue-600 tracking-widest">{p.category}</p>
+                    <h3 className="font-bold text-sm leading-tight mb-2">{p.name}</h3>
+                  </div>
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="font-black text-lg">{p.price} ₽</span>
+                    <button onClick={() => addToCart(p)} className="bg-blue-600 text-white p-2 rounded-xl">
+                      <PlusIcon />
+                    </button>
+                  </div>
                 </div>
-            `).join('');
-        }
+              ))}
+            </div>
+          </>
+        )}
 
-        function addToCart(id) {
-            const item = cart.find(i => i.id === id);
-            if (item) item.quantity++;
-            else cart.push({...products.find(p => p.id === id), quantity: 1});
-            showToast("Добавлено");
-            saveAndRefresh();
-        }
-
-        function changeQuantity(id, delta) {
-            const item = cart.find(i => i.id === id);
-            if (item) {
-                item.quantity += delta;
-                if (item.quantity <= 0) cart = cart.filter(i => i.id !== id);
-                saveAndRefresh();
-            }
-        }
-
-        function saveAndRefresh() {
-            localStorage.setItem('cart_liquid_v2', JSON.stringify(cart));
-            updateCartUI();
-            setupMainButton();
-        }
-
-        function toggleCart() {
-            const isOpen = document.getElementById('cartDrawer').classList.toggle('open');
-            document.getElementById('cartOverlay').classList.toggle('hidden');
-            setupMainButton();
-        }
-
-        function updateCartUI() {
-            const list = document.getElementById('cartItems');
-            const total = cart.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+        {view === 'admin' && isAdmin && (
+          <div className="space-y-8">
+            <button onClick={() => setView('catalog')} className="text-sm font-bold text-slate-400">← Назад в магазин</button>
+            <div className="bg-white p-6 rounded-3xl border">
+              <h2 className="text-xl font-black mb-4">Добавить товар</h2>
+              <form onSubmit={addProduct} className="space-y-3">
+                <input name="name" placeholder="Название" required className="w-full p-3 border rounded-xl" />
+                <input name="price" type="number" placeholder="Цена" required className="w-full p-3 border rounded-xl" />
+                <input name="img" placeholder="URL картинки" required className="w-full p-3 border rounded-xl" />
+                <select name="category" className="w-full p-3 border rounded-xl">
+                  {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+                <button className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold">Опубликовать</button>
+              </form>
+            </div>
             
-            document.getElementById('cartCount').innerText = cart.reduce((acc, i) => acc + i.quantity, 0);
-            document.getElementById('cartCount').classList.toggle('hidden', cart.length === 0);
-            document.getElementById('cartTotal').innerText = `${total.toLocaleString()} ₽`;
-            document.getElementById('checkoutTotal').innerText = `${total.toLocaleString()} ₽`;
-
-            if (cart.length === 0) {
-                list.innerHTML = `<div class="h-full flex flex-col items-center justify-center opacity-30 py-10"><p class="font-bold">Корзина пуста</p></div>`;
-            } else {
-                list.innerHTML = cart.map(i => `
-                    <div class="flex gap-4 items-center bg-white/40 p-3 rounded-2xl">
-                        <img src="${i.img}" class="w-16 h-16 rounded-xl object-cover">
-                        <div class="flex-1">
-                            <h4 class="font-bold text-slate-800 text-xs leading-tight">${i.name}</h4>
-                            <div class="flex items-center justify-between mt-2">
-                                <span class="text-blue-600 font-black text-xs">${i.price.toLocaleString()} ₽</span>
-                                <div class="flex items-center gap-2">
-                                    <button onclick="changeQuantity(${i.id}, -1)" class="w-6 h-6 flex items-center justify-center bg-white rounded shadow-xs font-bold">-</button>
-                                    <span class="text-xs font-black w-4 text-center">${i.quantity}</span>
-                                    <button onclick="changeQuantity(${i.id}, 1)" class="w-6 h-6 flex items-center justify-center bg-white rounded shadow-xs font-bold">+</button>
-                                </div>
-                            </div>
-                        </div>
+            <div className="bg-white p-6 rounded-3xl border">
+              <h2 className="text-xl font-black mb-4">Управление списком</h2>
+              <div className="space-y-3">
+                {products.map(p => (
+                  <div key={p.id} className="flex items-center justify-between p-3 border-b">
+                    <div className="flex items-center gap-3">
+                      <img src={p.img} className="w-10 h-10 rounded-lg object-cover" />
+                      <div>
+                        <p className="font-bold text-xs">{p.name}</p>
+                        <p className="text-[10px] text-slate-400">{p.price} ₽</p>
+                      </div>
                     </div>
-                `).join('');
-            }
-        }
+                    <button onClick={() => deleteProduct(p.id)} className="text-red-500 p-2">
+                      <TrashIcon />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
-        function goToCheckout() {
-            if (cart.length === 0) return showToast("Пусто");
-            navigateTo('checkout');
-        }
+        {view === 'checkout' && (
+          <div className="bg-white p-6 rounded-3xl border shadow-xl">
+            <h2 className="text-2xl font-black mb-6">Ваш заказ</h2>
+            <div className="space-y-4 mb-6">
+              {cart.map(i => (
+                <div key={i.id} className="flex justify-between items-center">
+                  <span className="font-bold text-sm">{i.name} x{i.quantity}</span>
+                  <span className="font-black text-sm">{i.price * i.quantity} ₽</span>
+                </div>
+              ))}
+              <div className="pt-4 border-t flex justify-between items-center">
+                <span className="text-slate-400 font-bold">ИТОГО</span>
+                <span className="text-2xl font-black">{total} ₽</span>
+              </div>
+            </div>
+            <button onClick={handleOrder} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black text-lg shadow-lg shadow-blue-200">
+              Подтвердить
+            </button>
+          </div>
+        )}
+      </div>
 
-        function handleOrderSubmit(e) {
-            e.preventDefault();
-            const total = document.getElementById('checkoutTotal').innerText;
-            const paymentMethod = document.querySelector('input[name="payment"]:checked').value;
-            const paymentText = paymentMethod === 'card' ? 'Картой' : 'Наличными';
-            
-            const successMsg = `Заказ оформлен!\nСумма: ${total}\nОплата: ${paymentText}`;
+      {/* Корзина Drawer */}
+      {isCartOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={() => setIsCartOpen(false)} />
+          <div className="relative w-full max-w-sm bg-white h-full flex flex-col shadow-2xl">
+            <div className="p-6 border-b flex justify-between items-center">
+              <h2 className="text-2xl font-black">Корзина</h2>
+              <button onClick={() => setIsCartOpen(false)} className="p-2 bg-slate-100 rounded-full">✕</button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {cart.length === 0 ? <p className="text-center text-slate-400 mt-20">Пусто</p> : cart.map(item => (
+                <div key={item.id} className="flex gap-4">
+                  <img src={item.img} className="w-16 h-16 rounded-2xl object-cover" />
+                  <div className="flex-1">
+                    <h4 className="font-bold text-sm">{item.name}</h4>
+                    <p className="text-blue-600 font-black text-sm">{item.price} ₽</p>
+                    <div className="flex items-center gap-3 mt-2">
+                      <button onClick={() => changeQty(item.id, -1)} className="w-6 h-6 border rounded-lg">-</button>
+                      <span className="text-xs font-bold">{item.quantity}</span>
+                      <button onClick={() => changeQty(item.id, 1)} className="w-6 h-6 border rounded-lg">+</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="p-6 border-t space-y-4">
+              <div className="flex justify-between font-black text-xl">
+                <span>Итого</span>
+                <span>{total} ₽</span>
+              </div>
+              <button 
+                disabled={cart.length === 0}
+                onClick={() => { setView('checkout'); setIsCartOpen(false); }}
+                className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold disabled:opacity-50"
+              >
+                Оформить заказ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
-            if (isTelegram) {
-                tg.showAlert(successMsg, () => {
-                    // После нажатия ОК в Telegram:
-                    cart = [];
-                    saveAndRefresh();
-                    navigateTo('catalog'); // Возвращаем на главную
-                    e.target.reset();
-                });
-            } else {
-                alert(successMsg);
-                cart = [];
-                saveAndRefresh();
-                navigateTo('catalog');
-                e.target.reset();
-            }
-        }
-
-        function showToast(msg) {
-            const container = document.getElementById('toastContainer');
-            const toast = document.createElement('div');
-            toast.className = "toast px-5 py-3 text-white font-bold text-xs shadow-xl";
-            toast.innerText = msg;
-            container.appendChild(toast);
-            setTimeout(() => {
-                toast.style.opacity = '0';
-                setTimeout(() => toast.remove(), 500);
-            }, 1500);
-        }
-
-        document.getElementById('searchInput').addEventListener('input', renderProducts);
-        
-        window.onload = () => {
-            if (tg.initDataUnsafe?.user?.first_name) {
-                const userName = tg.initDataUnsafe.user.first_name + (tg.initDataUnsafe.user.last_name ? ' ' + tg.initDataUnsafe.user.last_name : '');
-                const nameInput = document.getElementById('nameInput');
-                if (nameInput) nameInput.value = userName;
-            }
-
-            initCategories();
-            renderProducts();
-            updateCartUI();
-            setupMainButton();
-        };
-    </script>
-</body>
-</html>
+// Иконки (SVG)
+function CartIcon() { return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" /></svg>; }
+function SettingsIcon() { return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>; }
+function PlusIcon() { return <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 4v16m8-8H4" /></svg>; }
+function TrashIcon() { return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>; }
