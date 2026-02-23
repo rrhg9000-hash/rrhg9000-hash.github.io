@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { 
   getFirestore, 
   collection, 
@@ -13,20 +13,18 @@ import {
   addDoc
 } from 'firebase/firestore';
 
-// Конфигурация Firebase берется из окружения
+// Инициализация Firebase
 const firebaseConfig = JSON.parse(__firebase_config);
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'liquid-glass-shop';
 
-// ВАЖНО: Впишите сюда свой Telegram ID. 
-// Его можно узнать в ботах типа @userinfobot или через консоль приложения.
-const ADMIN_TELEGRAM_ID = 7744774197; // Замените на ваш реальный ID
+// ВАШ TELEGRAM ID
+const ADMIN_TELEGRAM_ID = 7744774197; 
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [tgUser, setTgUser] = useState(null);
   const [view, setView] = useState('catalog');
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -36,52 +34,60 @@ export default function App() {
   const [search, setSearch] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);
 
+  // Доступ к Telegram WebApp API
   const tg = window.Telegram?.WebApp;
 
-  // 1. Инициализация Auth
+  // 1. Инициализация Аутентификации (Правило 3)
   useEffect(() => {
     const initAuth = async () => {
-      await signInAnonymously(auth);
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Auth error:", err);
+      }
     };
     initAuth();
+
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
       if (tg?.initDataUnsafe?.user) {
-        const telegramUser = tg.initDataUnsafe.user;
-        setTgUser(telegramUser);
-        // Проверка прав админа по ID
-        if (Number(telegramUser.id) === ADMIN_TELEGRAM_ID) {
+        const userId = tg.initDataUnsafe.user.id;
+        // Сравниваем ID как числа или строки для надежности
+        if (Number(userId) === Number(ADMIN_TELEGRAM_ID)) {
           setIsAdmin(true);
         }
-      } else {
-        // Для тестов в браузере (можно временно включить тру)
-        // setIsAdmin(true); 
       }
     });
     return () => unsubscribe();
   }, []);
 
-  // 2. Подписка на данные (Firestore)
+  // 2. Загрузка данных из Firestore
   useEffect(() => {
-    if (!user) return;
+    if (!user) return; // Защита от запросов без авторизации
 
     const productsRef = collection(db, 'artifacts', appId, 'public', 'data', 'products');
     const categoriesRef = collection(db, 'artifacts', appId, 'public', 'data', 'categories');
 
+    // Слушатель товаров
     const unsubProducts = onSnapshot(productsRef, (snapshot) => {
       const pData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setProducts(pData);
-    }, (err) => console.error("Products fetch error:", err));
+    }, (err) => console.error("Firestore Products Error:", err));
 
+    // Слушатель категорий
     const unsubCategories = onSnapshot(categoriesRef, (snapshot) => {
-      const cData = snapshot.docs.map(doc => doc.data().name);
-      setCategories(cData.length ? cData : ["Гаджеты", "Аудио", "Свет"]);
-    }, (err) => console.error("Categories fetch error:", err));
+      const cData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setCategories(cData);
+    }, (err) => console.error("Firestore Categories Error:", err));
 
     return () => { unsubProducts(); unsubCategories(); };
   }, [user]);
 
-  // Логика корзины
+  // Расчет суммы корзины
   const total = useMemo(() => cart.reduce((sum, item) => sum + (item.price * item.quantity), 0), [cart]);
   
   const addToCart = (p) => {
@@ -101,36 +107,56 @@ export default function App() {
   };
 
   const handleOrder = () => {
-    tg.showAlert(`Заказ на сумму ${total} ₽ успешно оформлен!`);
+    if (tg?.showAlert) {
+      tg.showAlert(`Заказ на сумму ${total} ₽ успешно оформлен!`);
+    } else {
+      alert(`Заказ на сумму ${total} ₽ успешно оформлен!`);
+    }
     setCart([]);
     setView('catalog');
   };
 
-  // Админ-функции
+  // --- Админские функции ---
   const addProduct = async (e) => {
     e.preventDefault();
-    if (!isAdmin) return;
+    if (!isAdmin || !user) return;
     const form = e.target;
-    const newP = {
-      name: form.name.value,
-      price: Number(form.price.value),
-      img: form.img.value,
-      category: form.category.value
-    };
-    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), newP);
-    form.reset();
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), {
+        name: form.name.value,
+        price: Number(form.price.value),
+        img: form.img.value,
+        category: form.category.value,
+        createdAt: Date.now()
+      });
+      form.reset();
+    } catch (err) {
+      console.error("Add product error:", err);
+    }
   };
 
   const deleteProduct = async (id) => {
-    if (!isAdmin) return;
-    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', id));
+    if (!isAdmin || !user) return;
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', id));
+    } catch (err) {
+      console.error("Delete error:", err);
+    }
   };
 
-  const addCategory = async (name) => {
+  const createCategory = async (e) => {
+    e.preventDefault();
+    const name = e.target.catName.value.trim();
     if (!isAdmin || !name) return;
-    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'categories'), { name });
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'categories'), { name });
+      e.target.reset();
+    } catch (err) {
+      console.error("Add category error:", err);
+    }
   };
 
+  // Фильтрация
   const filteredProducts = products.filter(p => 
     (currentCat === 'all' || p.category === currentCat) && 
     p.name.toLowerCase().includes(search.toLowerCase())
@@ -138,22 +164,22 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-20">
-      {/* Навигация */}
-      <nav className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b px-4 py-3 flex justify-between items-center">
-        <div className="flex items-center gap-2" onClick={() => setView('catalog')}>
-          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">L</div>
-          <span className="font-extrabold text-xl tracking-tight">Liquid</span>
+      {/* Шапка */}
+      <nav className="sticky top-0 z-40 bg-white/90 backdrop-blur-lg border-b px-4 py-3 flex justify-between items-center shadow-sm">
+        <div className="flex items-center gap-2 cursor-pointer" onClick={() => setView('catalog')}>
+          <div className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center text-white font-bold shadow-lg shadow-blue-200">L</div>
+          <span className="font-extrabold text-xl tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-blue-500">Liquid</span>
         </div>
         <div className="flex items-center gap-3">
           {isAdmin && (
-            <button onClick={() => setView('admin')} className="p-2 bg-slate-100 rounded-full">
+            <button onClick={() => setView('admin')} className={`p-2 rounded-full transition-colors ${view === 'admin' ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-600'}`}>
               <SettingsIcon />
             </button>
           )}
-          <button onClick={() => setIsCartOpen(true)} className="relative p-2 bg-slate-100 rounded-full">
+          <button onClick={() => setIsCartOpen(true)} className="relative p-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200">
             <CartIcon />
             {cart.length > 0 && (
-              <span className="absolute -top-1 -right-1 bg-blue-600 text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">
+              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-black animate-pulse">
                 {cart.reduce((a, b) => a + b.quantity, 0)}
               </span>
             )}
@@ -161,82 +187,123 @@ export default function App() {
         </div>
       </nav>
 
-      {/* Контент */}
       <div className="max-w-2xl mx-auto px-4 py-6">
         {view === 'catalog' && (
           <>
-            <input 
-              type="text" 
-              placeholder="Поиск..." 
-              className="w-full p-3 bg-white border rounded-2xl mb-6 outline-none focus:ring-2 ring-blue-500/20"
-              onChange={(e) => setSearch(e.target.value)}
-            />
+            <div className="relative mb-6">
+              <input 
+                type="text" 
+                placeholder="Поиск товаров..." 
+                className="w-full p-4 pl-12 bg-white border-none shadow-sm rounded-2xl outline-none focus:ring-2 ring-blue-500/20 transition-all"
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
+                <SearchIcon />
+              </div>
+            </div>
+
             <div className="flex gap-2 overflow-x-auto pb-4 no-scrollbar">
               <button 
                 onClick={() => setCurrentCat('all')}
-                className={`px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap ${currentCat === 'all' ? 'bg-blue-600 text-white' : 'bg-white border text-slate-500'}`}
+                className={`px-5 py-2.5 rounded-xl text-sm font-bold whitespace-nowrap transition-all ${currentCat === 'all' ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-500 hover:bg-slate-100'}`}
               >
                 Все
               </button>
               {categories.map(c => (
                 <button 
-                  key={c}
-                  onClick={() => setCurrentCat(c)}
-                  className={`px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap ${currentCat === c ? 'bg-blue-600 text-white' : 'bg-white border text-slate-500'}`}
+                  key={c.id}
+                  onClick={() => setCurrentCat(c.name)}
+                  className={`px-5 py-2.5 rounded-xl text-sm font-bold whitespace-nowrap transition-all ${currentCat === c.name ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-500 hover:bg-slate-100'}`}
                 >
-                  {c}
+                  {c.name}
                 </button>
               ))}
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              {filteredProducts.map(p => (
-                <div key={p.id} className="bg-white rounded-3xl p-3 border border-slate-100 shadow-sm flex flex-col">
-                  <img src={p.img} className="w-full aspect-square object-cover rounded-2xl mb-3" alt={p.name} />
-                  <div className="flex-1">
-                    <p className="text-[10px] uppercase font-bold text-blue-600 tracking-widest">{p.category}</p>
-                    <h3 className="font-bold text-sm leading-tight mb-2">{p.name}</h3>
+
+            {filteredProducts.length === 0 ? (
+              <div className="text-center py-20 text-slate-400 font-medium">Товары не найдены</div>
+            ) : (
+              <div className="grid grid-cols-2 gap-4">
+                {filteredProducts.map(p => (
+                  <div key={p.id} className="group bg-white rounded-3xl p-3 border border-slate-100 shadow-sm hover:shadow-md transition-shadow flex flex-col">
+                    <div className="relative overflow-hidden rounded-2xl mb-3">
+                      <img src={p.img} className="w-full aspect-square object-cover group-hover:scale-105 transition-transform duration-500" alt={p.name} />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-[10px] uppercase font-black text-blue-500 tracking-widest mb-1">{p.category}</p>
+                      <h3 className="font-bold text-sm leading-tight text-slate-800 h-10 line-clamp-2">{p.name}</h3>
+                    </div>
+                    <div className="flex items-center justify-between mt-3">
+                      <span className="font-black text-lg text-slate-900">{p.price} ₽</span>
+                      <button onClick={() => addToCart(p)} className="bg-blue-600 text-white p-2.5 rounded-xl active:scale-90 transition-transform shadow-lg shadow-blue-100">
+                        <PlusIcon />
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between mt-2">
-                    <span className="font-black text-lg">{p.price} ₽</span>
-                    <button onClick={() => addToCart(p)} className="bg-blue-600 text-white p-2 rounded-xl">
-                      <PlusIcon />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </>
         )}
 
         {view === 'admin' && isAdmin && (
-          <div className="space-y-8">
-            <button onClick={() => setView('catalog')} className="text-sm font-bold text-slate-400">← Назад в магазин</button>
-            <div className="bg-white p-6 rounded-3xl border">
-              <h2 className="text-xl font-black mb-4">Добавить товар</h2>
-              <form onSubmit={addProduct} className="space-y-3">
-                <input name="name" placeholder="Название" required className="w-full p-3 border rounded-xl" />
-                <input name="price" type="number" placeholder="Цена" required className="w-full p-3 border rounded-xl" />
-                <input name="img" placeholder="URL картинки" required className="w-full p-3 border rounded-xl" />
-                <select name="category" className="w-full p-3 border rounded-xl">
-                  {categories.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-                <button className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold">Опубликовать</button>
+          <div className="space-y-6">
+            <button onClick={() => setView('catalog')} className="flex items-center gap-2 text-sm font-bold text-blue-600 bg-blue-50 px-4 py-2 rounded-xl">
+              <span>←</span> Назад в магазин
+            </button>
+
+            {/* Форма товара */}
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+              <h2 className="text-xl font-black mb-4 flex items-center gap-2">
+                <div className="w-2 h-6 bg-blue-600 rounded-full"></div>
+                Добавить товар
+              </h2>
+              <form onSubmit={addProduct} className="space-y-4">
+                <input name="name" placeholder="Название товара" required className="w-full p-3.5 bg-slate-50 border-none rounded-xl focus:ring-2 ring-blue-500/20" />
+                <div className="grid grid-cols-2 gap-3">
+                  <input name="price" type="number" placeholder="Цена" required className="w-full p-3.5 bg-slate-50 border-none rounded-xl focus:ring-2 ring-blue-500/20" />
+                  <select name="category" className="w-full p-3.5 bg-slate-50 border-none rounded-xl focus:ring-2 ring-blue-500/20">
+                    <option value="Без категории">Выберите категорию</option>
+                    {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                  </select>
+                </div>
+                <input name="img" placeholder="Прямая ссылка на фото (URL)" required className="w-full p-3.5 bg-slate-50 border-none rounded-xl focus:ring-2 ring-blue-500/20" />
+                <button className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold shadow-lg shadow-slate-200 active:scale-[0.98] transition-transform">
+                  Опубликовать в магазине
+                </button>
               </form>
             </div>
+
+            {/* Форма категорий */}
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+              <h2 className="text-xl font-black mb-4">Управление категориями</h2>
+              <form onSubmit={createCategory} className="flex gap-2 mb-4">
+                <input name="catName" placeholder="Название категории" required className="flex-1 p-3.5 bg-slate-50 border-none rounded-xl focus:ring-2 ring-blue-500/20" />
+                <button className="bg-blue-600 text-white px-6 rounded-xl font-bold">ОК</button>
+              </form>
+              <div className="flex flex-wrap gap-2">
+                {categories.map(c => (
+                   <span key={c.id} className="bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-200">
+                    {c.name}
+                   </span>
+                ))}
+              </div>
+            </div>
             
-            <div className="bg-white p-6 rounded-3xl border">
-              <h2 className="text-xl font-black mb-4">Управление списком</h2>
+            {/* Список для удаления */}
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+              <h2 className="text-xl font-black mb-4">Активные товары ({products.length})</h2>
               <div className="space-y-3">
-                {products.map(p => (
-                  <div key={p.id} className="flex items-center justify-between p-3 border-b">
+                {products.length === 0 ? <p className="text-slate-400 text-center py-4">Список пуст</p> : products.map(p => (
+                  <div key={p.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-2xl">
                     <div className="flex items-center gap-3">
-                      <img src={p.img} className="w-10 h-10 rounded-lg object-cover" />
+                      <img src={p.img} className="w-12 h-12 rounded-xl object-cover border" alt="" />
                       <div>
-                        <p className="font-bold text-xs">{p.name}</p>
-                        <p className="text-[10px] text-slate-400">{p.price} ₽</p>
+                        <p className="font-bold text-sm text-slate-800">{p.name}</p>
+                        <p className="text-[10px] font-bold text-blue-500">{p.price} ₽ • {p.category}</p>
                       </div>
                     </div>
-                    <button onClick={() => deleteProduct(p.id)} className="text-red-500 p-2">
+                    <button onClick={() => deleteProduct(p.id)} className="p-2 text-red-500 hover:bg-red-50 rounded-xl transition-colors">
                       <TrashIcon />
                     </button>
                   </div>
@@ -247,61 +314,71 @@ export default function App() {
         )}
 
         {view === 'checkout' && (
-          <div className="bg-white p-6 rounded-3xl border shadow-xl">
-            <h2 className="text-2xl font-black mb-6">Ваш заказ</h2>
-            <div className="space-y-4 mb-6">
+          <div className="bg-white p-8 rounded-[40px] shadow-xl border border-slate-50">
+            <h2 className="text-3xl font-black mb-8 text-center">Оформить заказ</h2>
+            <div className="space-y-4 mb-8">
               {cart.map(i => (
-                <div key={i.id} className="flex justify-between items-center">
-                  <span className="font-bold text-sm">{i.name} x{i.quantity}</span>
-                  <span className="font-black text-sm">{i.price * i.quantity} ₽</span>
+                <div key={i.id} className="flex justify-between items-center text-slate-600">
+                  <span className="font-bold">{i.name} <span className="text-blue-500">x{i.quantity}</span></span>
+                  <span className="font-black text-slate-900">{i.price * i.quantity} ₽</span>
                 </div>
               ))}
-              <div className="pt-4 border-t flex justify-between items-center">
-                <span className="text-slate-400 font-bold">ИТОГО</span>
-                <span className="text-2xl font-black">{total} ₽</span>
+              <div className="pt-6 border-t-2 border-dashed border-slate-100 flex justify-between items-center">
+                <span className="text-slate-400 font-black tracking-widest text-sm">ИТОГО К ОПЛАТЕ</span>
+                <span className="text-3xl font-black text-blue-600">{total} ₽</span>
               </div>
             </div>
-            <button onClick={handleOrder} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black text-lg shadow-lg shadow-blue-200">
-              Подтвердить
+            <button onClick={handleOrder} className="w-full bg-blue-600 text-white py-5 rounded-3xl font-black text-xl shadow-xl shadow-blue-200 active:scale-95 transition-all">
+              Подтвердить заказ
             </button>
+            <button onClick={() => setView('catalog')} className="w-full mt-4 text-slate-400 font-bold text-sm">Вернуться к выбору</button>
           </div>
         )}
       </div>
 
-      {/* Корзина Drawer */}
+      {/* Сайдбар корзины */}
       {isCartOpen && (
         <div className="fixed inset-0 z-50 flex justify-end">
-          <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={() => setIsCartOpen(false)} />
-          <div className="relative w-full max-w-sm bg-white h-full flex flex-col shadow-2xl">
-            <div className="p-6 border-b flex justify-between items-center">
+          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity" onClick={() => setIsCartOpen(false)} />
+          <div className="relative w-full max-w-sm bg-white h-full flex flex-col shadow-2xl animate-slide-in">
+            <div className="p-6 border-b flex justify-between items-center bg-slate-50/50">
               <h2 className="text-2xl font-black">Корзина</h2>
-              <button onClick={() => setIsCartOpen(false)} className="p-2 bg-slate-100 rounded-full">✕</button>
+              <button onClick={() => setIsCartOpen(false)} className="p-3 bg-white shadow-sm rounded-2xl hover:bg-slate-50 transition-colors">✕</button>
             </div>
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              {cart.length === 0 ? <p className="text-center text-slate-400 mt-20">Пусто</p> : cart.map(item => (
-                <div key={item.id} className="flex gap-4">
-                  <img src={item.img} className="w-16 h-16 rounded-2xl object-cover" />
-                  <div className="flex-1">
-                    <h4 className="font-bold text-sm">{item.name}</h4>
-                    <p className="text-blue-600 font-black text-sm">{item.price} ₽</p>
-                    <div className="flex items-center gap-3 mt-2">
-                      <button onClick={() => changeQty(item.id, -1)} className="w-6 h-6 border rounded-lg">-</button>
-                      <span className="text-xs font-bold">{item.quantity}</span>
-                      <button onClick={() => changeQty(item.id, 1)} className="w-6 h-6 border rounded-lg">+</button>
+            <div className="flex-1 overflow-y-auto p-6 space-y-5">
+              {cart.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-slate-300">
+                   <CartIcon />
+                   <p className="mt-4 font-bold">Корзина пуста</p>
+                </div>
+              ) : cart.map(item => (
+                <div key={item.id} className="flex gap-4 p-2 hover:bg-slate-50 rounded-2xl transition-colors">
+                  <img src={item.img} className="w-20 h-20 rounded-2xl object-cover border shadow-sm" alt="" />
+                  <div className="flex-1 flex flex-col justify-between">
+                    <div>
+                      <h4 className="font-bold text-sm leading-tight text-slate-800">{item.name}</h4>
+                      <p className="text-blue-600 font-black text-sm mt-1">{item.price} ₽</p>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-3 bg-slate-100 p-1 rounded-xl">
+                        <button onClick={() => changeQty(item.id, -1)} className="w-7 h-7 bg-white rounded-lg shadow-sm font-bold">-</button>
+                        <span className="text-xs font-black w-4 text-center">{item.quantity}</span>
+                        <button onClick={() => changeQty(item.id, 1)} className="w-7 h-7 bg-white rounded-lg shadow-sm font-bold">+</button>
+                      </div>
                     </div>
                   </div>
                 </div>
               ))}
             </div>
-            <div className="p-6 border-t space-y-4">
-              <div className="flex justify-between font-black text-xl">
-                <span>Итого</span>
-                <span>{total} ₽</span>
+            <div className="p-6 bg-slate-50 border-t space-y-4">
+              <div className="flex justify-between items-end">
+                <span className="text-slate-400 font-bold text-xs">СУММА</span>
+                <span className="text-3xl font-black text-slate-900">{total} ₽</span>
               </div>
               <button 
                 disabled={cart.length === 0}
                 onClick={() => { setView('checkout'); setIsCartOpen(false); }}
-                className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold disabled:opacity-50"
+                className="w-full bg-blue-600 text-white py-5 rounded-2xl font-black text-lg shadow-lg shadow-blue-100 disabled:opacity-50 disabled:shadow-none transition-all active:scale-[0.98]"
               >
                 Оформить заказ
               </button>
@@ -309,12 +386,20 @@ export default function App() {
           </div>
         </div>
       )}
+
+      <style>{`
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        @keyframes slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
+        .animate-slide-in { animation: slide-in 0.3s ease-out; }
+      `}</style>
     </div>
   );
 }
 
-// Иконки (SVG)
-function CartIcon() { return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" /></svg>; }
-function SettingsIcon() { return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>; }
-function PlusIcon() { return <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 4v16m8-8H4" /></svg>; }
+// Иконки
+function CartIcon() { return <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" /></svg>; }
+function SettingsIcon() { return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>; }
+function PlusIcon() { return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 4v16m8-8H4" /></svg>; }
 function TrashIcon() { return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>; }
+function SearchIcon() { return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>; }
