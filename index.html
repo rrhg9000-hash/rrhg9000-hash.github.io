@@ -11,9 +11,7 @@ import {
   updateDoc, 
   deleteDoc,
   arrayUnion,
-  arrayRemove,
-  query,
-  where
+  arrayRemove
 } from 'firebase/firestore';
 import { 
   Search, 
@@ -70,18 +68,13 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. Data Fetching (Публичные данные видны всем)
+  // 2. Data Fetching
   useEffect(() => {
-    // Мы убираем жесткую зависимость от user для начала загрузки, 
-    // но оставляем её для безопасности Firestore
     if (!user || !targetUsername) return;
 
     setLoading(true);
-    // Путь согласно правилу: /artifacts/{appId}/public/data/reviews
     const reviewsCol = collection(db, 'artifacts', appId, 'public', 'data', 'reviews');
     
-    // Согласно правилу 2 (No Complex Queries), мы берем коллекцию и фильтруем в JS
-    // Это гарантирует, что мы увидим ВСЕ отзывы, которые попали в эту коллекцию
     const unsubscribe = onSnapshot(
       reviewsCol,
       (snapshot) => {
@@ -90,23 +83,16 @@ export default function App() {
           ...doc.data()
         }));
         
-        // Фильтруем отзывы по целевому нику. 
-        // Приводим и ник в базе, и искомый ник к нижнему регистру для совпадения.
         const filtered = allData
           .filter(r => r.targetUsername?.toLowerCase() === targetUsername.toLowerCase())
-          .sort((a, b) => {
-            const timeA = a.createdAt?.seconds || 0;
-            const timeB = b.createdAt?.seconds || 0;
-            return timeB - timeA;
-          });
+          .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
         
-        console.log(`Найдено отзывов для ${targetUsername}:`, filtered.length);
         setReviews(filtered);
         setLoading(false);
       },
       (err) => {
         console.error("Firestore error:", err);
-        setError("Ошибка доступа к базе данных.");
+        setError("Ошибка загрузки данных.");
         setLoading(false);
       }
     );
@@ -117,11 +103,7 @@ export default function App() {
   const handleSearch = (e) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
-    
-    // Очистка ввода
     const cleanNick = searchQuery.replace('@', '').trim().toLowerCase();
-    
-    // Сброс состояний перед новым поиском
     setReviews([]); 
     setTargetUsername(cleanNick);
     setIsVerified(false);
@@ -140,8 +122,6 @@ export default function App() {
     setLoading(true);
     try {
       const reviewsCol = collection(db, 'artifacts', appId, 'public', 'data', 'reviews');
-      
-      // Сохраняем всегда в нижнем регистре для консистентности поиска
       await addDoc(reviewsCol, {
         targetUsername: targetUsername.toLowerCase(),
         authorId: user.uid,
@@ -150,11 +130,9 @@ export default function App() {
         likes: [],
         createdAt: serverTimestamp()
       });
-      
       setNewReview({ rating: 5, text: '' });
       setShowAddReview(false);
     } catch (err) {
-      console.error("Save error:", err);
       setError("Не удалось опубликовать отзыв.");
     } finally {
       setLoading(false);
@@ -166,14 +144,11 @@ export default function App() {
     const reviewRef = doc(db, 'artifacts', appId, 'public', 'data', 'reviews', reviewId);
     const safeLikes = Array.isArray(likesArray) ? likesArray : [];
     const isLiked = safeLikes.includes(user.uid);
-
     try {
       await updateDoc(reviewRef, {
         likes: isLiked ? arrayRemove(user.uid) : arrayUnion(user.uid)
       });
-    } catch (err) {
-      console.error("Like error:", err);
-    }
+    } catch (err) {}
   };
 
   const confirmDelete = async () => {
@@ -183,7 +158,7 @@ export default function App() {
       await deleteDoc(reviewRef);
       setDeleteId(null);
     } catch (err) {
-      console.error("Delete error:", err);
+      setError("Ошибка при удалении.");
     }
   };
 
@@ -192,182 +167,219 @@ export default function App() {
     : 0;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-24">
-      {/* Шапка */}
-      <header className="bg-white/80 backdrop-blur-lg border-b sticky top-0 z-30 p-4">
-        <div className="max-w-md mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {targetUsername ? (
-              <button onClick={() => setTargetUsername(null)} className="p-2 hover:bg-slate-100 rounded-full transition-all">
-                <ArrowLeft className="w-6 h-6 text-slate-600" />
-              </button>
-            ) : (
-              <div className="w-10 h-10 bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-lg rotate-3">
-                <ShieldCheck className="w-6 h-6" />
-              </div>
-            )}
-            <h1 className="font-black text-xl tracking-tight text-slate-800">Person Check</h1>
-          </div>
-          {loading && <RefreshCw className="w-5 h-5 text-blue-500 animate-spin" />}
-        </div>
-      </header>
-
-      <main className="max-w-md mx-auto p-4">
-        {error && (
-          <div className="mb-4 p-4 bg-red-50 border border-red-100 text-red-600 rounded-2xl flex items-center gap-3 animate-in fade-in">
-            <AlertCircle className="w-5 h-5 shrink-0" />
-            <p className="text-sm font-bold">{error}</p>
-            <button onClick={() => setError(null)} className="ml-auto"><X className="w-4 h-4" /></button>
-          </div>
-        )}
-
-        {!targetUsername ? (
-          <div className="space-y-8 pt-8 animate-in fade-in slide-in-from-top-4">
-            <div className="text-center space-y-3">
-              <h2 className="text-4xl font-black text-slate-900">Проверь его</h2>
-              <p className="text-slate-500 text-lg font-medium">Общая база отзывов Telegram</p>
-            </div>
-
-            <form onSubmit={handleSearch} className="relative group">
-              <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-indigo-500 rounded-[2.5rem] blur opacity-20 group-focus-within:opacity-40 transition"></div>
-              <input 
-                type="text"
-                placeholder="Введите @username..."
-                className="relative w-full p-6 pl-14 rounded-[2rem] bg-white border-none shadow-xl focus:ring-2 focus:ring-blue-500 outline-none text-lg font-semibold"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-              <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400 w-6 h-6" />
-              <button 
-                type="submit"
-                className="absolute right-3 top-1/2 -translate-y-1/2 bg-slate-900 text-white px-6 py-3 rounded-2xl font-black hover:bg-black transition-all"
-              >
-                Найти
-              </button>
-            </form>
-          </div>
-        ) : (
-          <div className="space-y-6 animate-in slide-in-from-bottom-10">
-            {/* Профиль */}
-            <div className="bg-white p-8 rounded-[3rem] border border-slate-100 shadow-xl text-center">
-              <div className="w-20 h-20 bg-slate-100 rounded-full mx-auto flex items-center justify-center text-slate-400 mb-4">
-                <User className="w-10 h-10" />
-              </div>
-              <h2 className="text-3xl font-black tracking-tighter">@{targetUsername}</h2>
-              
-              <div className="mt-4">
-                <button onClick={openTelegram} className="text-blue-600 text-sm font-bold flex items-center justify-center gap-1 mx-auto hover:underline">
-                  <ExternalLink className="w-4 h-4" /> Проверить аккаунт
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col items-center p-0 m-0">
+      {/* Контейнер приложения */}
+      <div className="w-full max-w-md bg-slate-50 min-h-screen relative flex flex-col border-x border-slate-100 shadow-sm">
+        
+        {/* Header */}
+        <header className="bg-white/80 backdrop-blur-md sticky top-0 z-40 p-4 border-b border-slate-100">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {targetUsername ? (
+                <button onClick={() => setTargetUsername(null)} className="p-2 hover:bg-slate-50 rounded-full transition-all active:scale-90">
+                  <ArrowLeft className="w-6 h-6 text-slate-600" />
                 </button>
+              ) : (
+                <div className="w-10 h-10 bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-lg rotate-2">
+                  <ShieldCheck className="w-6 h-6" />
+                </div>
+              )}
+              <span className="font-black text-xl tracking-tight text-slate-800">Person Check</span>
+            </div>
+            {loading && <RefreshCw className="w-5 h-5 text-blue-500 animate-spin" />}
+          </div>
+        </header>
+
+        {/* Content */}
+        <main className="flex-1 p-5 pb-24">
+          {error && (
+            <div className="mb-6 p-4 bg-red-50 border border-red-100 text-red-600 rounded-2xl flex items-center gap-3 animate-pulse">
+              <AlertCircle className="w-5 h-5 shrink-0" />
+              <p className="text-sm font-bold">{error}</p>
+            </div>
+          )}
+
+          {!targetUsername ? (
+            <div className="space-y-10 pt-10">
+              <div className="text-center space-y-3">
+                <h2 className="text-4xl font-black text-slate-900 tracking-tighter leading-none">Найди правду</h2>
+                <p className="text-slate-400 font-bold uppercase text-[11px] tracking-widest">Общая база репутации</p>
               </div>
 
-              <div className="flex flex-col items-center gap-2 mt-6">
-                <div className="flex gap-1">
-                  {[1, 2, 3, 4, 5].map((s) => (
-                    <Star key={s} className={`w-6 h-6 ${s <= Math.round(averageRating) ? 'fill-yellow-400 text-yellow-400' : 'text-slate-100'}`} />
+              <form onSubmit={handleSearch} className="relative group">
+                <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-indigo-500 rounded-[2.2rem] blur opacity-15 group-focus-within:opacity-30 transition-opacity"></div>
+                <input 
+                  type="text"
+                  placeholder="Введите ник @..."
+                  className="relative w-full p-6 pl-14 rounded-[2rem] bg-white border-2 border-slate-50 shadow-xl focus:border-blue-500 outline-none text-lg font-bold transition-all"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+                <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-300 w-6 h-6" />
+                <button 
+                  type="submit"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 bg-slate-900 text-white px-5 py-3 rounded-2xl font-black hover:bg-black active:scale-95 transition-all text-sm"
+                >
+                  Найти
+                </button>
+              </form>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex flex-col items-center text-center gap-3">
+                  <Star className="text-yellow-400 w-8 h-8 fill-yellow-400" />
+                  <p className="text-sm font-black text-slate-800 uppercase tracking-tighter">Честно</p>
+                </div>
+                <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex flex-col items-center text-center gap-3">
+                  <Heart className="text-rose-400 w-8 h-8 fill-rose-400" />
+                  <p className="text-sm font-black text-slate-800 uppercase tracking-tighter">Надежно</p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {/* Profile Card */}
+              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-xl text-center">
+                <div className="w-16 h-16 bg-slate-100 rounded-2xl mx-auto flex items-center justify-center text-slate-300 mb-4 rotate-3">
+                  <User className="w-8 h-8" />
+                </div>
+                <h2 className="text-3xl font-black tracking-tighter text-slate-900 mb-2">@{targetUsername}</h2>
+                <button 
+                  onClick={openTelegram}
+                  className="inline-flex items-center gap-2 text-blue-600 text-xs font-black uppercase tracking-widest hover:bg-blue-50 px-3 py-1 rounded-lg transition-colors"
+                >
+                  <ExternalLink className="w-4 h-4" /> Перейти в Telegram
+                </button>
+
+                <div className="mt-8 flex flex-col items-center gap-3">
+                  <div className="flex gap-1.5">
+                    {[1, 2, 3, 4, 5].map((s) => (
+                      <Star key={s} className={`w-6 h-6 ${s <= Math.round(averageRating) ? 'fill-yellow-400 text-yellow-400' : 'text-slate-100'}`} />
+                    ))}
+                  </div>
+                  <div className="bg-slate-50 px-5 py-2 rounded-2xl border border-slate-100">
+                    <span className="text-xl font-black text-slate-800">{averageRating}</span>
+                    <span className="text-slate-400 text-sm font-bold ml-1">/ 5.0</span>
+                    <span className="mx-3 text-slate-200">|</span>
+                    <span className="text-slate-500 text-sm font-bold">{reviews.length} отзывов</span>
+                  </div>
+                </div>
+              </div>
+
+              <button 
+                onClick={() => setShowAddReview(true)}
+                className="w-full bg-blue-600 text-white p-6 rounded-[2rem] font-black text-xl flex items-center justify-center gap-4 shadow-xl shadow-blue-100 hover:bg-blue-700 active:scale-[0.98] transition-all"
+              >
+                <Plus className="w-7 h-7" />
+                Написать отзыв
+              </button>
+
+              {/* Reviews */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-black text-slate-800 ml-4">Все мнения</h3>
+                {reviews.length === 0 ? (
+                  <div className="bg-white p-12 rounded-[2.5rem] text-center border-2 border-dashed border-slate-100">
+                    <MessageSquare className="w-10 h-10 text-slate-100 mx-auto mb-4" />
+                    <p className="text-slate-400 font-bold">Будьте первым, кто оставит отзыв</p>
+                  </div>
+                ) : (
+                  reviews.map((r) => (
+                    <div key={r.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm space-y-4">
+                      <div className="flex justify-between items-center">
+                        <div className="flex gap-1">
+                          {[1, 2, 3, 4, 5].map((s) => (
+                            <Star key={s} className={`w-3.5 h-3.5 ${s <= r.rating ? 'fill-yellow-400 text-yellow-400' : 'text-slate-100'}`} />
+                          ))}
+                        </div>
+                        {r.authorId === user?.uid && (
+                          <button onClick={() => setDeleteId(r.id)} className="text-slate-200 hover:text-red-500 transition-colors">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-slate-700 font-semibold leading-relaxed break-words">{r.text}</p>
+                      <div className="flex justify-between items-center pt-4 border-t border-slate-50">
+                        <button 
+                          onClick={() => toggleLike(r.id, r.likes)}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition-all ${r.likes?.includes(user?.uid) ? 'bg-rose-500 text-white shadow-md' : 'bg-slate-50 text-slate-400'}`}
+                        >
+                          <Heart className={`w-4 h-4 ${r.likes?.includes(user?.uid) ? 'fill-current' : ''}`} />
+                          {r.likes?.length || 0}
+                        </button>
+                        <span className="text-[10px] font-mono text-slate-300 font-bold">UID: {r.authorId?.slice(-6)}</span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </main>
+
+        {/* Footer */}
+        <footer className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white border-t border-slate-100 p-4 text-center z-50">
+          <div className="flex items-center justify-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${user ? 'bg-green-500 shadow-lg' : 'bg-red-500 animate-pulse'}`}></div>
+            <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">
+              {user ? `Ваш ID: ${user.uid.slice(-8)}` : 'Синхронизация...'}
+            </p>
+          </div>
+        </footer>
+
+        {/* Modal: Add Review */}
+        {showAddReview && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4">
+            <div className="bg-white w-full max-w-md rounded-t-[3rem] sm:rounded-[3rem] p-10 animate-in slide-in-from-bottom duration-300 shadow-2xl">
+              <div className="flex justify-between items-center mb-8">
+                <h3 className="text-2xl font-black tracking-tight">Ваш отзыв</h3>
+                <button onClick={() => setShowAddReview(false)} className="bg-slate-100 p-2 rounded-full"><X className="w-5 h-5 text-slate-500" /></button>
+              </div>
+
+              <div className="space-y-8">
+                <div className="flex justify-center gap-3">
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <button 
+                      key={n} 
+                      onClick={() => setNewReview({...newReview, rating: n})} 
+                      className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all ${newReview.rating >= n ? 'bg-yellow-400 text-white shadow-lg scale-105' : 'bg-slate-50 text-slate-200'}`}
+                    >
+                      <Star className="w-8 h-8 fill-current" />
+                    </button>
                   ))}
                 </div>
-                <p className="text-slate-500 font-bold">{reviews.length} отзывов от сообщества</p>
+
+                <textarea 
+                  className="w-full p-6 rounded-[2rem] bg-slate-50 border-none h-40 text-lg font-bold outline-none focus:ring-2 focus:ring-blue-500 transition-all resize-none"
+                  placeholder="Расскажите вашу историю..."
+                  value={newReview.text}
+                  onChange={(e) => setNewReview({...newReview, text: e.target.value})}
+                />
+
+                <button 
+                  onClick={submitReview}
+                  disabled={!newReview.text.trim() || loading}
+                  className="w-full bg-slate-900 text-white p-6 rounded-[2rem] font-black text-xl disabled:opacity-30 shadow-2xl active:scale-95 transition-all"
+                >
+                  {loading ? 'Публикация...' : 'Опубликовать'}
+                </button>
               </div>
-            </div>
-
-            <button 
-              onClick={() => setShowAddReview(true)}
-              className="w-full bg-blue-600 text-white p-6 rounded-[2rem] font-black text-xl flex items-center justify-center gap-3 shadow-lg active:scale-95 transition-all"
-            >
-              <Plus className="w-6 h-6" /> Написать отзыв
-            </button>
-
-            {/* Список отзывов */}
-            <div className="space-y-4">
-              {reviews.map((review) => (
-                <div key={review.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm relative animate-in fade-in">
-                  <div className="flex justify-between items-start mb-4">
-                    <div className="flex gap-0.5">
-                      {[1, 2, 3, 4, 5].map((s) => (
-                        <Star key={s} className={`w-3.5 h-3.5 ${s <= review.rating ? 'fill-yellow-400 text-yellow-400' : 'text-slate-100'}`} />
-                      ))}
-                    </div>
-                    {review.authorId === user?.uid && (
-                      <button onClick={() => setDeleteId(review.id)} className="text-slate-200 hover:text-red-500 transition-colors">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                  <p className="text-slate-700 font-medium mb-4 whitespace-pre-wrap">{review.text}</p>
-                  <div className="flex justify-between items-center pt-4 border-t border-slate-50">
-                    <button 
-                      onClick={() => toggleLike(review.id, review.likes)}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition-all ${review.likes?.includes(user?.uid) ? 'bg-rose-500 text-white' : 'bg-slate-50 text-slate-400'}`}
-                    >
-                      <Heart className={`w-4 h-4 ${review.likes?.includes(user?.uid) ? 'fill-current' : ''}`} />
-                      {review.likes?.length || 0}
-                    </button>
-                    <span className="text-[10px] text-slate-300 font-mono">ID: {review.authorId?.slice(-6)}</span>
-                  </div>
-                </div>
-              ))}
             </div>
           </div>
         )}
-      </main>
 
-      {/* Окно удаления */}
-      {deleteId && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[100] flex items-center justify-center p-6">
-          <div className="bg-white rounded-[2.5rem] p-8 max-w-sm w-full text-center">
-            <h3 className="text-xl font-black mb-6">Удалить отзыв?</h3>
-            <div className="flex flex-col gap-2">
-              <button onClick={confirmDelete} className="p-4 bg-red-500 text-white rounded-2xl font-bold">Да, удалить</button>
-              <button onClick={() => setDeleteId(null)} className="p-4 bg-slate-100 text-slate-500 rounded-2xl font-bold">Отмена</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Окно добавления */}
-      {showAddReview && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-end sm:items-center justify-center">
-          <div className="bg-white w-full max-w-md rounded-t-[3rem] sm:rounded-[3rem] p-8 shadow-2xl animate-in slide-in-from-bottom">
-            <div className="flex justify-between items-center mb-8">
-              <h3 className="text-2xl font-black">Ваш отзыв</h3>
-              <button onClick={() => setShowAddReview(false)} className="p-2 bg-slate-100 rounded-full"><X className="w-5 h-5" /></button>
-            </div>
-
-            <div className="space-y-6">
-              <div className="flex justify-center gap-2">
-                {[1, 2, 3, 4, 5].map((n) => (
-                  <button key={n} onClick={() => setNewReview({...newReview, rating: n})} className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all ${newReview.rating >= n ? 'bg-yellow-400 text-white' : 'bg-slate-50 text-slate-200'}`}>
-                    <Star className="w-6 h-6 fill-current" />
-                  </button>
-                ))}
+        {/* Modal: Delete */}
+        {deleteId && (
+          <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
+            <div className="bg-white rounded-[2.5rem] p-10 w-full max-w-xs text-center shadow-2xl">
+              <h3 className="text-2xl font-black mb-6 tracking-tight">Удалить?</h3>
+              <div className="flex flex-col gap-3">
+                <button onClick={confirmDelete} className="p-5 bg-red-500 text-white rounded-2xl font-black shadow-lg shadow-red-100">Да, удалить</button>
+                <button onClick={() => setDeleteId(null)} className="p-5 bg-slate-100 text-slate-500 rounded-2xl font-black">Отмена</button>
               </div>
-
-              <textarea 
-                className="w-full p-5 rounded-2xl bg-slate-50 border-none h-32 text-lg font-bold outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Расскажите о вашем опыте..."
-                value={newReview.text}
-                onChange={(e) => setNewReview({...newReview, text: e.target.value})}
-              />
-
-              <button 
-                onClick={submitReview}
-                disabled={!newReview.text.trim() || loading}
-                className="w-full bg-slate-900 text-white p-5 rounded-2xl font-black text-lg disabled:opacity-30 shadow-lg"
-              >
-                {loading ? "Публикация..." : "Опубликовать отзыв"}
-              </button>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Статус пользователя */}
-      <footer className="fixed bottom-0 left-0 right-0 bg-white border-t p-3 text-center z-40">
-        <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">
-          {user ? `Ваш ID: ${user.uid.slice(-8)} (Все отзывы видны всем)` : 'Синхронизация...'}
-        </p>
-      </footer>
+      </div>
     </div>
   );
 }
